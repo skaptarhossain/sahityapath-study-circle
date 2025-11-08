@@ -1,0 +1,1 @@
+{\n  "name": "sahityapath",\n  "version": "1.0.0",\n  "private": true,\n  "scripts": {\n    "start": "npx http-server -p 8080 -c-1 .",\n    "proxy": "node server.js"\n  },\n  "devDependencies": {\n    "http-server": "^14.1.1"\n  },\n  "dependencies": {\n    "express": "^4.18.2",\n    "node-fetch": "^2.6.7",\n    "dotenv": "^16.0.3"\n  }\n}
