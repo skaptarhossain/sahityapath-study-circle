@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>SahityaPath Study Circle</title>
+
+  <!-- Tailwind + React -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.0/marked.min.js"></script>
+
+  <style>
+    body { background:#f7fafc; font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; }
+    .modal-scroll { max-height: 90vh; overflow-y: auto; }
+    .markdown-content { padding: 1rem; border-radius: .5rem; background: #fff; line-height: 1.6; }
+    .toast-bar { z-index: 9999; position: fixed; top: 1rem; right: 1rem; min-width: 220px; max-width: 420px; padding: .9rem 1rem; border-radius: .7rem; display:flex; gap:.6rem; align-items:center; }
+  </style>
+
+  <!--
+    IMPORTANT:
+    Replace the firebaseConfig below with your Firebase project values OR
+    change index.html to read them from server-provided variables.
+    For security: do NOT put server-only keys (Gemini key) in this file.
+  -->
+  <script>
+    const firebaseConfig = {
+      apiKey: "YOUR_FIREBASE_API_KEY",
+      authDomain: "YOUR_FIREBASE_AUTH_DOMAIN",
+      projectId: "YOUR_FIREBASE_PROJECT_ID",
+      storageBucket: "YOUR_FIREBASE_STORAGE_BUCKET",
+      messagingSenderId: "YOUR_FIREBASE_MESSAGING_SENDER_ID",
+      appId: "YOUR_FIREBASE_APP_ID",
+      measurementId: "YOUR_FIREBASE_MEASUREMENT_ID"
+    };
+    const appId = firebaseConfig.projectId;
+
+    // If you have a server proxy set up, the client will call /api/generate for AI
+    window.callGeminiApi = async (prompt, systemInstruction) => {
+      try {
+        const res = await fetch('/api/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt, systemInstruction })
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json?.error || 'Gemini proxy error');
+        return json.text || json.output || '';
+      } catch (e) {
+        // fallback message
+        return `AI service not available: ${e.message}`;
+      }
+    };
+  </script>
+
+  <!-- Firebase client libs for Firestore & Auth (module loaded in script below) -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import * as auth from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import * as firestore from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+    try {
+      const app = initializeApp(firebaseConfig);
+      window.firebase = { app, auth: auth, firestore: firestore };
+      window.firebaseReady = true;
+    } catch (e) {
+      console.error('Firebase init error', e);
+      window.firebaseFailed = true;
+    }
+  </script>
+</head>
+<body>
+  <div id="root" class="min-h-screen"></div>
+
+  <script type="text/babel">
+    // ==== SahityaPath Single-file app (React) ====
+    const { useState, useEffect, useContext, createContext, useMemo } = React;
+
+    // --- Simple Icon map for small UI icons ---
+    window.Fa = new Proxy({}, {
+      get: (_, prop) => (props) => <span {...props} style={{display:"inline-block",width:"1em"}}>{ {
+        FaSignOutAlt:"🚪", FaBookOpen:"📚", FaUsers:"👥", FaArrowLeft:"←", FaArrowRight:"→",
+        FaPlus:"+", FaMagic:"✨", FaEdit:"✏️", FaTrashAlt:"🗑️", FaUser:"👤", FaCheck:"✅", FaTimes:"❌"
+      }[prop]||'•'}</span>
+    });
+    const Icon = ({name, ...rest}) => {
+      const Comp = window.Fa[name] || (() => <span>•</span>);
+      return <Comp {...rest} />;
+    };
+
+    // --- Toasts ---
+    const ToastContext = createContext();
+    const ToastProvider = ({children})=>{
+      const [toasts, setToasts] = useState([]);
+      const addToast = (msg, type='info') => {
+        const id = Date.now()+Math.random();
+        setToasts(t => [...t, { id, msg, type }]);
+        setTimeout(()=>setToasts(t => t.filter(x=>x.id!==id)), 3800);
+      };
+      return (
+        <ToastContext.Provider value={{ addToast }}>
+          {children}
+          <div className="flex flex-col gap-2 fixed top-4 right-4 z-[9999]">
+            {toasts.map(t => (
+              <div key={t.id} className={`toast-bar ${t.type==='success'?'bg-green-600 text-white':t.type==='error'?'bg-red-600 text-white':'bg-primary-blue text-white'}`}> 
+                <div>{t.type==='success'?'✅':t.type==='error'?'❌':'ℹ️'}</div>
+                <div className="flex-1 text-sm">{t.msg}</div>
+                <button onClick={()=>setToasts(s=>s.filter(x=>x.id!==t.id))} className="ml-2 font-bold">×</button>
+              </div>
+            ))}
+          </div>
+        </ToastContext.Provider>
+      );
+    };
+    const useToast = ()=>useContext(ToastContext);
+
+    // --- Auth & Firestore Provider (wraps firebase SDK) ---
+    const AuthContext = createContext();
+    const AuthProvider = ({children})=>{
+      const [authState, setAuthState] = useState({ auth:null, db:null, user:null, ready:false });
+      useEffect(()=>{
+        if(!window.firebaseReady) return;
+        const { app, auth: authModule, firestore: firestoreModule } = window.firebase;
+        const a = authModule.getAuth(app);
+        const db = firestoreModule.getFirestore(app);
+        setAuthState(s => ({...s, auth:a, db }));
+        const unsub = authModule.onAuthStateChanged(a, u => {
+          setAuthState(s => ({...s, user:u, ready:true }));
+        });
+        return ()=>unsub();
+      }, []);
+      if(!authState.ready) return (<div className="flex items-center justify-center min-h-screen"><div>Loading authentication...</div></div>);
+      const handleSignOut = ()=> window.firebase.auth.signOut(authState.auth);
+      return <AuthContext.Provider value={{ ...authState, handleSignOut }}>{children}</AuthContext.Provider>;
+    };
+    const useAuth = ()=>useContext(AuthContext);
+
+    // --- Utility ---
+    function prettyTimeAgo(dt){
+      if(!dt) return ''; 
+      if(typeof dt === 'object' && dt.seconds) dt = new Date(dt.seconds*1000);
+      else dt = new Date(dt);
+      const diff = Math.floor((Date.now()-dt)/1000);
+      if(diff < 60) return 'এখনই';
+      if(diff < 3600) return `${Math.floor(diff/60)} মিনিট আগে`;
+      if(diff < 86400) return `${Math.floor(diff/3600)} ঘণ্টা আগে`;
+      if(diff < 7*86400) return `${Math.floor(diff/86400)} দিন আগে`;
+      return dt.toLocaleDateString();
+    }
+
+    // --- Simple small components: Navbar, UserBadge ---
+    const UserBadge = ({u})=> <span className="inline-flex items-center gap-2 px-2 py-1 bg-gray-100 rounded text-sm"><Icon name="FaUser" /> {u?.email||u?.uid?.slice?.(0,8) || 'Guest'}</span>;
+
+    const Navbar = ({ user, onSignOut }) => (
+      <header className="bg-white shadow p-4 flex justify-between items-center sticky top-0 z-20">
+        <div className="flex items-center gap-3">
+          <Icon name="FaBookOpen" className="text-2xl" /> <h1 className="font-bold text-lg">SahityaPath</h1>
+        </div>
+        <div className="flex items-center gap-3">
+          <UserBadge u={user} />
+          <button onClick={onSignOut} className="bg-red-500 text-white px-3 py-1 rounded">লগআউট</button>
+        </div>
+      </header>
+    );
+
+    // --- Authentication UI ---
+    const AuthUI = ()=>{
+      const { auth } = useAuth();
+      const { addToast } = useToast();
+      const [mode, setMode] = useState('signin');
+      const [email, setEmail] = useState('');
+      const [password, setPassword] = useState('');
+      const [loading, setLoading] = useState(false);
+
+      const handleEmail = async (e)=>{
+        e.preventDefault();
+        setLoading(true);
+        try {
+          if(mode === 'signup') await window.firebase.auth.createUserWithEmailAndPassword(auth, email, password);
+          else await window.firebase.auth.signInWithEmailAndPassword(auth, email, password);
+        } catch(e){ addToast(e.message, 'error'); }
+        finally { setLoading(false); }
+      };
+
+      const handleGoogle = async ()=>{
+        setLoading(true);
+        try {
+          const provider = new window.firebase.auth.GoogleAuthProvider();
+          await window.firebase.auth.signInWithPopup(window.firebase.auth.getAuth(window.firebase.app), provider);
+        } catch (e) { addToast(e.message, 'error'); } finally { setLoading(false); }
+      };
+
+      return (
+        <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-primary-blue to-accent-indigo">
+          <div className="bg-white p-8 rounded-lg shadow-md max-w-md w-full">
+            <h2 className="text-2xl font-bold text-center mb-4">SahityaPath</h2>
+            <div className="flex gap-2 mb-4">
+              <button onClick={()=>setMode('signin')} className={`flex-1 py-2 ${mode==='signin'?'bg-primary-blue text-white':'bg-gray-100'}`}>Sign In</button>
+              <button onClick={()=>setMode('signup')} className={`flex-1 py-2 ${mode==='signup'?'bg-accent-indigo text-white':'bg-gray-100'}`}>Register</button>
+            </div>
+            <form onSubmit={handleEmail}>
+              <input value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email" className="w-full mb-2 p-2 border rounded" />
+              <input value={password} onChange={e=>setPassword(e.target.value)} placeholder="Password" type="password" className="w-full mb-4 p-2 border rounded" />
+              <button type="submit" disabled={loading} className="w-full py-2 bg-primary-blue text-white rounded mb-2">{mode==='signin'?'Sign In':'Register'}</button>
+            </form>
+            <div className="text-center mb-2">or</div>
+            <button onClick={handleGoogle} className="w-full py-2 bg-red-500 text-white rounded">Sign in with Google</button>
+          </div>
+        </div>
+      );
+    };
+
+    // --- CategoryManager component ---
+    const CategoryManager = ({ categories, collectionPath, isAdmin=true })=>{
+      const { db } = useAuth();
+      const { addToast } = useToast();
+      const [name, setName] = useState('');
+      const [editing, setEditing] = useState(null);
+      const [editName, setEditName] = useState('');
+
+      const addCat = async ()=>{
+        if(!name.trim()) return;
+        try {
+          const col = window.firebase.firestore.collection(db, `${collectionPath}/categories`);
+          await window.firebase.firestore.addDoc(col, { name: name.trim() });
+          setName('');
+          addToast('ক্যাটাগরি যুক্ত হয়েছে', 'success');
+        } catch(e){ addToast(e.message, 'error'); }
+      };
+      const saveEdit = async ()=>{
+        if(!editing) return;
+        try {
+          const docRef = window.firebase.firestore.doc(db, `${collectionPath}/categories/${editing.id}`);
+          await window.firebase.firestore.setDoc(docRef, { name: editName }, { merge: true });
+          setEditing(null); setEditName('');
+          addToast('আপডেট হয়েছে', 'success');
+        } catch(e){ addToast(e.message,'error'); }
+      };
+      const removeCat = async (c)=>{
+        if(!confirm('নিশ্চিত?')) return;
+        try {
+          const docRef = window.firebase.firestore.doc(db, `${collectionPath}/categories/${c.id}`);
+          await window.firebase.firestore.deleteDoc(docRef);
+          addToast('মুছে ফেলা হয়েছে','success');
+        } catch(e){ addToast(e.message,'error'); }
+      };
+
+      if(!isAdmin && collectionPath.includes('/group_data/')) return <div></div>;
+
+      return (
+        <div className="bg-white p-4 rounded shadow mb-4">
+          <h3 className="font-bold mb-2">ক্যাটাগরি</h3>
+          <div className="flex gap-2 mb-2">
+            <input value={name} onChange={e=>setName(e.target.value)} placeholder="নতুন ক্যাটাগরি" className="flex-1 p-2 border rounded" />
+            <button onClick={addCat} className="px-3 py-2 bg-accent-indigo text-white rounded">যোগ</button>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {categories.map(c=>(
+              <div key={c.id} className="px-3 py-1 bg-gray-100 rounded flex items-center gap-2">
+                {editing?.id === c.id ? (
+                  <>
+                    <input value={editName} onChange={e=>setEditName(e.target.value)} className="p-1 border rounded" />
+                    <button onClick={saveEdit} className="text-green-600"><Icon name="FaCheck" /></button>
+                    <button onClick={()=>setEditing(null)} className="text-red-500"><Icon name="FaTimes" /></button>
+                  </>
+                ) : (
+                  <>
+                    <span>{c.name}</span>
+                    <button onClick={()=>{setEditing(c);setEditName(c.name)}} className="text-blue-600"><Icon name="FaEdit" /></button>
+                    <button onClick={()=>removeCat(c)} className="text-red-600"><Icon name="FaTrashAlt" /></button>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    };
+
+    // --- Note / Quiz editor modals ---
+    const NoteEditorModal = ({isOpen, onClose, onSave, categories, initial})=>{
+      const [title,setTitle] = useState(initial?.title||'');
+      const [content,setContent] = useState(initial?.content||'');
+      const [categoryId,setCategoryId] = useState(initial?.categoryId|| (categories[0]?.id||''));
+      const [err,setErr] = useState('');
+      useEffect(()=>{
+        if(isOpen){
+          setTitle(initial?.title||''); setContent(initial?.content||''); setCategoryId(initial?.categoryId|| (categories[0]?.id||''));
+        }
+      },[isOpen, initial, categories]);
+
+      if(!isOpen) return null;
+      return (
+        <div className="fixed inset-0 bg-black bg-opacity-40 z-40 flex items-center justify-center p-2">
+          <div className="bg-white p-5 rounded shadow max-w-lg w-full modal-scroll">
+            <h3 className="text-xl font-bold mb-2">{initial?.id ? 'নোট সম্পাদনা' : 'নতুন নোট'}</h3>
+            {err && <div className="text-red-500 mb-2">{err}</div>}
+            <input value={title} onChange={e=>setTitle(e.target.value)} placeholder="শিরোনাম" className="w-full p-2 border rounded mb-2" />
+            <select value={categoryId} onChange={e=>setCategoryId(e.target.value)} className="w-full p-2 border rounded mb-2">
+              <option value="">বাছাই করুন</option>
+              {categories.map(c=> <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <textarea value={content} onChange={e=>setContent(e.target.value)} rows={8} className="w-full p-2 border rounded mb-3" placeholder="বর্ণনা..."></textarea>
+            <div className="flex justify-end gap-2">
+              <button onClick={onClose} className="px-3 py-2 bg-gray-200 rounded">বাতিল</button>
+              <button onClick={()=>{
+                if(!title.trim()||!content.trim()){ setErr('শিরোনাম ও কন্টেন্ট আবশ্যক'); return; }
+                onSave({ id: initial?.id, title, content, categoryId }); onClose();
+              }} className="px-3 py-2 bg-primary-blue text-white rounded">সেভ</button>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    const QuizEditorModal = ({isOpen, onClose, onSave, categories, initial})=>{
+      const [title,setTitle] = useState(initial?.title||'');
+      const [desc,setDesc] = useState(initial?.description||'');
+      const [categoryId,setCategoryId] = useState(initial?.categoryId|| (categories[0]?.id||''));
+      const [err,setErr] = useState('');
+      useEffect(()=>{ if(isOpen){ setTitle(initial?.title||''); setDesc(initial?.description||''); setCategoryId(initial?.categoryId|| (categories[0]?.id||'')); } },[isOpen, initial, categories]);
+      if(!isOpen) return null;
+      return (
+        <div className="fixed inset-0 bg-black bg-opacity-40 z-40 flex items-center justify-center p-2">
+          <div className="bg-white p-5 rounded shadow max-w-lg w-full modal-scroll">
+            <h3 className="text-xl font-bold mb-2">{initial?.id ? 'কুইজ সম্পাদনা' : 'নতুন কুইজ'}</h3>
+            {err && <div className="text-red-500 mb-2">{err}</div>}
+            <input value={title} onChange={e=>setTitle(e.target.value)} placeholder="কুইজ শিরোনাম" className="w-full p-2 border rounded mb-2" />
+            <select value={categoryId} onChange={e=>setCategoryId(e.target.value)} className="w-full p-2 border rounded mb-2">
+              <option value="">বাছাই করুন</option>
+              {categories.map(c=> <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <textarea value={desc} onChange={e=>setDesc(e.target.value)} rows={6} className="w-full p-2 border rounded mb-3" placeholder="বর্ণনা (ঐচ্ছিক)"></textarea>
+            <div className="flex justify-end gap-2">
+              <button onClick={onClose} className="px-3 py-2 bg-gray-200 rounded">বাতিল</button>
+              <button onClick={()=>{
+                if(!title.trim()){ setErr('শিরোনাম দরকার'); return; }
+                onSave({ id: initial?.id, title, description: desc, categoryId }); onClose();
+              }} className="px-3 py-2 bg-primary-blue text-white rounded">সেভ</button>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // --- AI generation modal (calls /api/generate via window.callGeminiApi) ---
+    const AIGenNoteModal = ({isOpen, onClose, onGenerate})=>{
+      const [topic,setTopic] = useState('');
+      const [preview,setPreview] = useState('');
+      const [loading,setLoading] = useState(false);
+      const { addToast } = useToast();
+
+      const generate = async ()=>{
+        if(!topic.trim()) { addToast('বিষয় লিখুন', 'error'); return; }
+        setLoading(true); setPreview('');
+        try {
+          const text = await window.callGeminiApi(topic, 'AI note in Bengali for students');
+          setPreview(text);
+        } catch(e) { addToast('AI error: '+e.message, 'error'); }
+        finally { setLoading(false); }
+      };
+
+      if(!isOpen) return null;
+      return (
+        <div className="fixed inset-0 bg-black bg-opacity-40 z-40 flex items-center justify-center p-2">
+          <div className="bg-white p-5 rounded shadow max-w-lg w-full modal-scroll">
+            <h3 className="text-xl font-bold mb-2"><Icon name="FaMagic" /> AI দিয়ে নোট</h3>
+            <input value={topic} onChange={e=>setTopic(e.target.value)} placeholder="বিষয় দিন" className="w-full p-2 border rounded mb-2" />
+            <div className="flex gap-2 mb-2">
+              <button onClick={generate} className="px-3 py-2 bg-accent-indigo text-white rounded" disabled={loading}>তৈরি করুন</button>
+              <button onClick={onClose} className="px-3 py-2 bg-gray-200 rounded">বাতিল</button>
+            </div>
+            {loading && <div className="py-2">তৈরি হচ্ছে...</div>}
+            {preview && (
+              <div>
+                <div className="markdown-content mb-2" dangerouslySetInnerHTML={{__html: marked.parse(preview)}}></div>
+                <div className="flex gap-2">
+                  <button onClick={()=>{ onGenerate(topic, preview); onClose(); }} className="px-3 py-2 bg-green-600 text-white rounded">সংরক্ষণ করুন</button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    };
+
+    // --- ContentManager (notes / quizzes) ---
+    const ContentManager = ({ categories, contentPath, type })=>{
+      const { db, user } = useAuth();
+      const { addToast } = useToast();
+      const [items, setItems] = useState([]);
+      const [loading, setLoading] = useState(true);
+      const isNote = type === 'notes';
+
+      useEffect(()=>{
+        const ref = window.firebase.firestore.collection(db, `${contentPath}/${isNote?'notes':'my_quizzes'}`);
+        const unsub = window.firebase.firestore.onSnapshot(ref, snap=>{
+          setItems(snap.docs.map(d => ({ id:d.id, ...d.data() })));
+          setLoading(false);
+        }, ()=>setLoading(false));
+        return ()=>unsub();
+      }, [db, contentPath, type]);
+
+      const [isModalOpen, setIsModalOpen] = useState(false);
+      const [editItem, setEditItem] = useState(null);
+      const [deleteItem, setDeleteItem] = useState(null);
+      const [aiOpen, setAiOpen] = useState(false);
+
+      const save = async (data) => {
+        const doc = {
+          title: data.title,
+          ...(isNote ? { content: data.content } : { description: data.description }),
+          categoryId: data.categoryId,
+          categoryName: categories.find(c=>c.id===data.categoryId)?.name || 'অনির্ধারিত',
+          authorId: user.uid,
+          authorEmail: user.email || user.displayName || 'unknown',
+          updatedAt: new Date(),
+        };
+        try {
+          const ref = window.firebase.firestore.collection(db, `${contentPath}/${isNote?'notes':'my_quizzes'}`);
+          if(data.id){
+            const docRef = window.firebase.firestore.doc(ref, data.id);
+            await window.firebase.firestore.setDoc(docRef, doc, { merge: true });
+          } else {
+            await window.firebase.firestore.addDoc(ref, { ...doc, createdAt: new Date() });
+          }
+          addToast('সেভ হয়েছে', 'success');
+        } catch(e){ addToast('Save error: '+e.message, 'error'); }
+      };
+
+      const confirmDelete = async () => {
+        if(!deleteItem) return;
+        try {
+          const path = `${contentPath}/${isNote?'notes':'my_quizzes'}/${deleteItem.id}`;
+          const docRef = window.firebase.firestore.doc(db, path);
+          await window.firebase.firestore.deleteDoc(docRef);
+          addToast('মুছে ফেলা হয়েছে', 'success');
+        } catch(e){ addToast('Delete error: '+e.message, 'error'); }
+        setDeleteItem(null);
+      };
+
+      const handleAI = (topic, aiText) => {
+        // Save AI-generated note as new note
+        save({ id: null, title: `AI: ${topic}`, content: aiText, categoryId: categories[0]?.id||'' });
+      };
+
+      return (
+        <div className="bg-white p-4 rounded shadow">
+          <div className="flex gap-2 mb-3">
+            <button onClick={()=>{ setEditItem(null); setIsModalOpen(true); }} className="px-3 py-2 bg-primary-blue text-white rounded">নতুন {isNote?'নোট':'কুইজ'}</button>
+            {isNote && <button onClick={()=>setAiOpen(true)} className="px-3 py-2 bg-indigo-600 text-white rounded">AI নোট</button>}
+          </div>
+          {loading && <div>লোড হচ্ছে...</div>}
+          {!loading && items.length === 0 && <div className="text-gray-600">কোনো আইটেম নেই</div>}
+          <div className="space-y-2">
+            {items.map(it=>(
+              <div key={it.id} className="p-2 border rounded flex justify-between items-center">
+                <div>
+                  <div className="font-semibold">{it.title}</div>
+                  <div className="text-xs text-gray-500">{it.categoryName} • {it.authorEmail}</div>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={()=>{ setEditItem(it); setIsModalOpen(true); }} className="text-green-600"><Icon name="FaEdit" /></button>
+                  {it.authorId === user.uid && <button onClick={()=>setDeleteItem(it)} className="text-red-600"><Icon name="FaTrashAlt" /></button>}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {isNote && <NoteEditorModal isOpen={isModalOpen} onClose={()=>setIsModalOpen(false)} onSave={save} categories={categories} initial={editItem} />}
+          {!isNote && <QuizEditorModal isOpen={isModalOpen} onClose={()=>setIsModalOpen(false)} onSave={save} categories={categories} initial={editItem} />}
+          <AIGenNoteModal isOpen={aiOpen} onClose={()=>setAiOpen(false)} onGenerate={handleAI} />
+          {deleteItem && (
+            <div className="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-40">
+              <div className="bg-white p-4 rounded shadow text-center">
+                <div className="font-bold mb-2">Are you sure?</div>
+                <div className="mb-3">{deleteItem.title}</div>
+                <div className="flex gap-2 justify-center">
+                  <button onClick={confirmDelete} className="bg-red-500 text-white px-3 py-1 rounded">Delete</button>
+                  <button onClick={()=>setDeleteItem(null)} className="bg-gray-200 px-3 py-1 rounded">Cancel</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    // --- Personal Desk page ---
+    const PersonalDesk = ({ user, goHome })=>{
+      const { db, appId } = useAuth();
+      const [categories, setCategories] = useState([]);
+      const path = `artifacts/${appId}/users/${user.uid}`;
+      useEffect(()=>{
+        if(!db) return;
+        const ref = window.firebase.firestore.collection(db, `${path}/categories`);
+        const unsub = window.firebase.firestore.onSnapshot(ref, snap => setCategories(snap.docs.map(d=>({ id:d.id, ...d.data() }))));
+        return ()=>unsub();
+      }, [db, user, appId]);
+
+      return (
+        <div className="max-w-4xl mx-auto p-4">
+          <button onClick={goHome} className="text-primary-blue mb-3"><Icon name="FaArrowLeft" /> ড্যাশবোর্ড</button>
+          <h2 className="text-2xl font-bold mb-3">Personal Desk</h2>
+          <CategoryManager categories={categories} collectionPath={path} isAdmin={true} />
+          <h3 className="mt-4 mb-2">নোট</h3>
+          <ContentManager categories={categories} contentPath={path} type="notes" />
+          <h3 className="mt-6 mb-2">কুইজ</h3>
+          <ContentManager categories={categories} contentPath={path} type="quizzes" />
+        </div>
+      );
+    };
+
+    // --- Group Study Circles (minimal) ---
+    const GroupStudyCircles = ({ user, goHome, onSelectGroup })=>{
+      const { db, appId } = useAuth();
+      const [groups, setGroups] = useState([]);
+      useEffect(()=>{
+        if(!db) return;
+        const ref = window.firebase.firestore.collection(db, `artifacts/${appId}/groups`);
+        const unsub = window.firebase.firestore.onSnapshot(ref, snap => setGroups(snap.docs.map(d=>({ id:d.id, ...d.data() }))));
+        return ()=>unsub();
+      }, [db, appId]);
+
+      const createGroup = async ()=>{
+        const name = prompt('গ্রুপের নাম দিন');
+        if(!name) return;
+        const ref = window.firebase.firestore.collection(window.firebase.firestore.getFirestore(window.firebase.app), `artifacts/${appId}/groups`);
+        await window.firebase.firestore.addDoc(ref, { name, adminId: user.uid, members: [user.uid], createdAt: new Date(), publicId: 'G-'+Math.random().toString(36).slice(2,8).toUpperCase() });
+        alert('Group created');
+      };
+
+      return (
+        <div className="max-w-4xl mx-auto p-4">
+          <button onClick={goHome} className="text-primary-blue mb-3"><Icon name="FaArrowLeft" /> ড্যাশবোর্ড</button>
+          <h2 className="text-2xl font-bold mb-4">Group Study Circles</h2>
+          <div className="grid gap-3">
+            <button onClick={createGroup} className="bg-accent-indigo text-white px-3 py-2 rounded w-48">নতুন গ্রুপ</button>
+            {groups.map(g=>(
+              <div key={g.id} className="p-3 bg-white rounded shadow flex justify-between items-center">
+                <div>
+                  <div className="font-semibold">{g.name}</div>
+                  <div className="text-xs text-gray-500">Public ID: {g.publicId}</div>
+                </div>
+                <div>
+                  <button onClick={()=>onSelectGroup(g)} className="px-3 py-1 bg-primary-blue text-white rounded">Open</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    };
+
+    // --- GroupDashboard (basic shell) ---
+    const GroupDashboard = ({ group, user, goHome })=>{
+      const [view, setView] = useState('notes');
+      const [categories, setCategories] = useState([]);
+      const { db, appId } = useAuth();
+      const path = `artifacts/${appId}/group_data/${group.id}`;
+      useEffect(()=>{
+        if(!db) return;
+        const ref = window.firebase.firestore.collection(db, `${path}/categories`);
+        const unsub = window.firebase.firestore.onSnapshot(ref, snap => setCategories(snap.docs.map(d=>({ id:d.id, ...d.data() }))));
+        return ()=>unsub();
+      }, [db, path]);
+
+      return (
+        <div className="max-w-5xl mx-auto p-4">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <button onClick={goHome} className="text-primary-blue"><Icon name="FaArrowLeft" /> সব গ্রুপ</button>
+              <h2 className="text-2xl font-bold">{group.name}</h2>
+              <div className="text-xs text-gray-500">Public ID: {group.publicId}</div>
+            </div>
+          </div>
+          <CategoryManager categories={categories} collectionPath={path} isAdmin={group.adminId === user.uid} />
+          <div className="flex gap-2 mt-4">
+            <button onClick={()=>setView('notes')} className={`px-3 py-2 ${view==='notes'?'bg-primary-blue text-white':'bg-gray-100'}`}>Notes</button>
+            <button onClick={()=>setView('quizzes')} className={`px-3 py-2 ${view==='quizzes'?'bg-primary-blue text-white':'bg-gray-100'}`}>Quizzes</button>
+            <button onClick={()=>setView('members')} className={`px-3 py-2 ${view==='members'?'bg-primary-blue text-white':'bg-gray-100'}`}>Members</button>
+          </div>
+
+          <div className="mt-4">
+            {view==='notes' && (<ContentManager categories={categories} contentPath={path} type="notes" />)}
+            {view==='quizzes' && (<ContentManager categories={categories} contentPath={path} type="quizzes" />)}
+            {view==='members' && (<div className="bg-white p-4 rounded shadow">Members list (basic) - {group.members?.length||0} members</div>)}
+          </div>
+        </div>
+      );
+    };
+
+    // --- Main Dashboard & App ---
+    const MainDashboard = ({ user, onSignOut })=>{
+      const [view, setView] = useState('main');
+      const [selectedGroup, setSelectedGroup] = useState(null);
+      return (
+        <div>
+          <Navbar user={user} onSignOut={onSignOut} />
+          <main className="p-4">
+            {view === 'main' && (
+              <div className="max-w-4xl mx-auto text-center py-12">
+                <h2 className="text-3xl font-bold mb-4">স্বাগতম, {user.displayName || user.email}</h2>
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div onClick={()=>setView('personal')} className="bg-white p-6 rounded shadow cursor-pointer">Personal Desk</div>
+                  <div onClick={()=>setView('groups')} className="bg-white p-6 rounded shadow cursor-pointer">Group Study Circles</div>
+                </div>
+              </div>
+            )}
+            {view === 'personal' && <PersonalDesk user={user} goHome={()=>setView('main')} />}
+            {view === 'groups' && <GroupStudyCircles user={user} goHome={()=>setView('main')} onSelectGroup={(g)=>{ setSelectedGroup(g); setView('groupDashboard'); }} />}
+            {view === 'groupDashboard' && selectedGroup && <GroupDashboard group={selectedGroup} user={user} goHome={()=>setView('groups')} />}
+          </main>
+        </div>
+      );
+    };
+
+    const App = ()=> {
+      const { user, handleSignOut } = useAuth();
+      return !user ? <AuthUI /> : <MainDashboard user={user} onSignOut={handleSignOut} />;
+    };
+
+    // --- Start app once firebase is ready ---
+    const start = () => {
+      const container = document.getElementById('root');
+      const root = ReactDOM.createRoot(container);
+      root.render(
+        <ToastProvider>
+          <AuthProvider>
+            <App />
+          </AuthProvider>
+        </ToastProvider>
+      );
+    };
+
+    // Wait for firebase init (module script) to set window.firebaseReady
+    const waitForFirebase = setInterval(()=>{ if(window.firebaseReady || window.firebaseFailed){ clearInterval(waitForFirebase); start(); } }, 100);
+  </script>
+</body>
+</html>
