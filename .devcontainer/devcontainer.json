@@ -1,0 +1,40 @@
+{
+  "name": "SahityaPath Study Circle",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:18",
+  
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "18"
+    }
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "ms-vscode.vscode-typescript-next"
+      ],
+      "settings": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "esbenp.prettier-vscode"
+      }
+    }
+  },
+
+  "forwardPorts": [8080, 4000],
+  "portsAttributes": {
+    "8080": {
+      "label": "Frontend (http-server)",
+      "onAutoForward": "notify"
+    },
+    "4000": {
+      "label": "Proxy Server",
+      "onAutoForward": "notify"
+    }
+  },
+
+  "postCreateCommand": "npm install",
+
+  "remoteUser": "node"
+}
