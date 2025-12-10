@@ -1,0 +1,22 @@
+==================================================
+SAHITYAPATH QUIZ APP - ORIGINAL FIREBASE CONFIG
+==================================================
+এই config টি "SahityaPath Quiz" app এর জন্য।
+এটা Group Study 2.0 app এর জন্য নয়।
+
+Firebase Project: sahityapath-quiz-notes
+App Name: SahityaPath Quiz
+--------------------------------------------------
+
+const firebaseConfig = {
+  apiKey: "AIzaSyA6HRcYWvT4gjEX2_D17eAlnIIpUb9-fBE",
+  authDomain: "sahityapath-quiz-notes.firebaseapp.com",
+  projectId: "sahityapath-quiz-notes",
+  storageBucket: "sahityapath-quiz-notes.firebasestorage.app",
+  messagingSenderId: "769586918371",
+  appId: "1:769586918371:web:3b715c4e3b3f421118a6d6",
+  measurementId: "G-NKFG60WQDD"
+};
+
+Hosting URL: https://sahityapath-quiz-notes.web.app
+--------------------------------------------------
