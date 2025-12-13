@@ -1,5 +1,8 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useCallback } from 'react'
 import { motion } from 'framer-motion'
+import * as XLSX from 'xlsx'
+import mammoth from 'mammoth'
+import { sanitizeHtml, smartSanitize } from '@/lib/html-sanitizer'
 import {
   Users,
   Plus,
@@ -28,6 +31,8 @@ import {
   Clock,
   Video,
   Upload,
+  Download,
+  Package,
   Code,
   Pencil,
   AlertTriangle,
@@ -35,6 +40,18 @@ import {
   XCircle,
   Vote,
   Bell,
+  Shuffle,
+  Trophy,
+  Target,
+  BarChart3,
+  Eye,
+  History,
+  Award,
+  TrendingUp,
+  Calendar,
+  CheckCircle2,
+  CircleDot,
+  RefreshCw,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -46,17 +63,22 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { useGroupStore } from '@/stores/group-store'
 import { useAuthStore } from '@/stores/auth-store'
-import { storage } from '@/config/firebase'
+import { useLibraryStore } from '@/stores/library-store'
+import { storage, db } from '@/config/firebase'
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
+import { doc, setDoc, getDoc, updateDoc, query, collection, where, getDocs } from 'firebase/firestore'
 import { v4 as uuidv4 } from 'uuid'
 import ReactQuill from 'react-quill'
 import 'react-quill/dist/quill.snow.css'
-import type { Group, GroupTopic, GroupSubTopic, GroupContentItem, GroupMCQ, DeleteRequest } from '@/types'
+import type { Group, GroupTopic, GroupSubTopic, GroupContentItem, GroupMCQ, DeleteRequest, GroupQuestionCategory, GroupQuizResult, LiveTest, LiveTestResult, LibraryContentPack } from '@/types'
+import { GroupQuizRunner } from './group-quiz-runner'
+import { ReportDialog } from './report-dialog'
 
 export function GroupDashboard() {
   const user = useAuthStore(s => s.user)
   const { 
-    myGroups, 
+    myGroups,
+    setMyGroups,
     activeGroupId, 
     setActiveGroup, 
     addGroup, 
@@ -66,6 +88,7 @@ export function GroupDashboard() {
     subTopics,
     contentItems,
     groupMCQs,
+    questionCategories,
     addTopic,
     removeTopic,
     updateTopic,
@@ -78,22 +101,51 @@ export function GroupDashboard() {
     removeContentItem,
     addGroupMCQ,
     removeGroupMCQ,
+    addQuestionCategory,
+    removeQuestionCategory,
     createDeleteRequest,
     voteOnDeleteRequest,
     resolveDeleteRequest,
     deleteRequests,
     getTopicsByGroup,
+    getMCQsByCategory,
+    getCategoriesByGroup,
     getSubTopicsByTopic,
     getContentBySubTopic,
     getMCQsByGroup,
     getLatestNotes,
+    getReportsByCreator,
+    resolveContentReport,
+    findGroupByCode,
+    getQuizResultsByUser,
+    getLeaderboard,
+    getUserQuizHistory,
+    quizResults,
+    liveTests,
+    liveTestResults,
+    addLiveTest,
+    updateLiveTest,
+    removeLiveTest,
+    getLiveTestsByGroup,
+    getUpcomingLiveTests,
+    getActiveLiveTest,
+    getPastLiveTests,
+    addLiveTestResult,
+    updateLiveTestResult,
+    getLiveTestResultsByTest,
+    getUserLiveTestResult,
+    getLiveTestLeaderboard,
+    setAutoLiveTestConfig,
+    getAutoLiveTestConfig,
   } = useGroupStore()
 
   // UI States
   const [showCreateGroup, setShowCreateGroup] = useState(false)
   const [showJoinGroup, setShowJoinGroup] = useState(false)
-  const [activeTab, setActiveTab] = useState<'whats-new' | 'course' | 'live-test' | 'members' | 'settings'>('whats-new')
+  const [activeTab, setActiveTab] = useState<'whats-new' | 'course' | 'live-test' | 'settings'>('whats-new')
   const [expandedTopics, setExpandedTopics] = useState<string[]>([])
+  const [isEditMode, setIsEditMode] = useState(false)  // Display vs Edit mode
+  const [viewingContent, setViewingContent] = useState<GroupContentItem | null>(null)  // For viewing content in display mode
   
   // Form states
   const [newGroupName, setNewGroupName] = useState('')
@@ -130,12 +182,93 @@ export function GroupDashboard() {
   const [mcqCorrect, setMcqCorrect] = useState(0)
   const [addingMCQTo, setAddingMCQTo] = useState<string | null>(null)
   
-  // Live Test state
-  const [isTestRunning, setIsTestRunning] = useState(false)
-  const [testQuestions, setTestQuestions] = useState<GroupMCQ[]>([])
-  const [currentQuestion, setCurrentQuestion] = useState(0)
-  const [selectedAnswers, setSelectedAnswers] = useState<Record<string, number>>({})
-  const [showTestResults, setShowTestResults] = useState(false)
+  // Live Test Tab state
+  const [liveTestTab, setLiveTestTab] = useState<'upcoming' | 'active' | 'past' | 'results'>('upcoming')
+  const [selectedLiveTest, setSelectedLiveTest] = useState<LiveTest | null>(null)
+  const [viewingLiveTestResult, setViewingLiveTestResult] = useState<LiveTestResult | null>(null)
+  const [viewingLiveTestSolutions, setViewingLiveTestSolutions] = useState(false)
+  
+  // Live Test Running state
+  const [runningLiveTest, setRunningLiveTest] = useState<LiveTest | null>(null)
+  const [liveTestQuestions, setLiveTestQuestions] = useState<GroupMCQ[]>([])
+  const [liveTestCurrentQ, setLiveTestCurrentQ] = useState(0)
+  const [liveTestAnswers, setLiveTestAnswers] = useState<Record<string, number>>({})
+  const [liveTestStartedAt, setLiveTestStartedAt] = useState<number>(0)
+  
+  // Create Live Test form (in Settings)
+  const [showCreateLiveTest, setShowCreateLiveTest] = useState(false)
+  const [newLiveTestTitle, setNewLiveTestTitle] = useState('')
+  const [newLiveTestStartDate, setNewLiveTestStartDate] = useState('')
+  const [newLiveTestStartTime, setNewLiveTestStartTime] = useState('')
+  const [newLiveTestEndDate, setNewLiveTestEndDate] = useState('')
+  const [newLiveTestEndTime, setNewLiveTestEndTime] = useState('')
+  const [newLiveTestDuration, setNewLiveTestDuration] = useState('30')
+  const [newLiveTestMode, setNewLiveTestMode] = useState<'auto' | 'manual'>('auto')
+  const [newLiveTestCategories, setNewLiveTestCategories] = useState<string[]>([])
+  const [newLiveTestQuestionCount, setNewLiveTestQuestionCount] = useState('20')
+  const [newLiveTestAutoRelease, setNewLiveTestAutoRelease] = useState(true)
+  const [newLiveTestShowSolution, setNewLiveTestShowSolution] = useState(true)
+  const [newLiveTestShowLeaderboard, setNewLiveTestShowLeaderboard] = useState(true)
+  
+  // Auto Daily Test states
+  const [liveTestMgmtTab, setLiveTestMgmtTab] = useState<'schedule' | 'auto'>('schedule')
+  const [autoTestEnabled, setAutoTestEnabled] = useState(false)
+  const [autoTestTitle, setAutoTestTitle] = useState('Daily Practice Test')
+  const [autoTestCategories, setAutoTestCategories] = useState<string[]>([])
+  const [autoTestStartTime, setAutoTestStartTime] = useState('10:00')
+  const [autoTestEndTime, setAutoTestEndTime] = useState('22:00')
+  const [autoTestDuration, setAutoTestDuration] = useState('30')
+  const [autoTestQuestionCount, setAutoTestQuestionCount] = useState('20')
+  const [autoTestDays, setAutoTestDays] = useState<number[]>([0, 1, 2, 3, 4, 5, 6])
+  const [autoTestAutoRelease, setAutoTestAutoRelease] = useState(true)
+  const [autoTestShowSolution, setAutoTestShowSolution] = useState(true)
+  const [autoTestShowLeaderboard, setAutoTestShowLeaderboard] = useState(true)
+  
+  // Question Bank Tab state
+  const [questionBankTab, setQuestionBankTab] = useState<'single' | 'group' | 'instant'>('single')
+  
+  // Group Upload states
+  const [groupUploadFile, setGroupUploadFile] = useState<File | null>(null)
+  const [groupUploadParsedQuestions, setGroupUploadParsedQuestions] = useState<Array<{
+    question: string
+    options: string[]
+    correctIndex: number
+  }>>([])
+  const [groupUploadCategory, setGroupUploadCategory] = useState('')
+  const [groupUploadLoading, setGroupUploadLoading] = useState(false)
+  const [groupUploadError, setGroupUploadError] = useState('')
+  
+  // Library (Instant Download) states
+  const [librarySelectedPack, setLibrarySelectedPack] = useState<LibraryContentPack | null>(null)
+  const [libraryDownloadCategory, setLibraryDownloadCategory] = useState('')
+  const [libraryDownloadMode, setLibraryDownloadMode] = useState<'new' | 'merge'>('new')
+  const [libraryNewCategoryName, setLibraryNewCategoryName] = useState('')
+  
+  // Library store
+  const {
+    subjects: librarySubjects,
+    topics: libraryTopics,
+    contentPacks: libraryPacks,
+    mcqs: libraryMcqs,
+    notes: libraryNotes,
+    selectedSubjectId: librarySubjectId,
+    selectedTopicId: libraryTopicId,
+    filterPricing: libraryFilterPricing,
+    setSelectedSubject: setLibrarySubject,
+    setSelectedTopic: setLibraryTopic,
+    setFilterPricing: setLibraryFilterPricing,
+    getTopicsBySubject: getLibraryTopicsBySubject,
+    getPacksBySubject: getLibraryPacksBySubject,
+    getPacksByTopic: getLibraryPacksByTopic,
+    getMcqsByPack: getLibraryMcqsByPack,
+    getNotesByPack: getLibraryNotesByPack,
+    addDownload: addLibraryDownload,
+    hasDownloaded: hasLibraryDownloaded,
+    initSampleData: initLibrarySampleData,
+  } = useLibraryStore()
+  
+  // Quiz Runner state (new - with result, leaderboard, etc.)
+  const [runningQuiz, setRunningQuiz] = useState<{ item: GroupContentItem; questions: GroupMCQ[]; timeLimit: number | null } | null>(null)
   
   // Source code toggle for editors
   const [showSourceCode, setShowSourceCode] = useState(false)
@@ -143,6 +276,26 @@ export function GroupDashboard() {
   
   // Delete requests modal
   const [showDeleteRequests, setShowDeleteRequests] = useState(false)
+  
+  // Assign members modal
+  const [showAssignModal, setShowAssignModal] = useState(false)
+  const [assigningTopicId, setAssigningTopicId] = useState<string | null>(null)
+  const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([])
+  
+  // Question Bank states
+  const [newCategoryName, setNewCategoryName] = useState('')
+  const [qbQuestion, setQbQuestion] = useState('')
+  const [qbOptions, setQbOptions] = useState(['', '', '', ''])
+  const [qbCorrect, setQbCorrect] = useState(0)
+  const [qbCategoryId, setQbCategoryId] = useState('')
+  const [expandedQbCategories, setExpandedQbCategories] = useState<string[]>([])
+  
+  // Quiz - Question Bank selection
+  const [selectedQBQuestions, setSelectedQBQuestions] = useState<string[]>([])  // MCQ ids
+  const [showQBSelector, setShowQBSelector] = useState(false)
+  const [quizSelectionMode, setQuizSelectionMode] = useState<'manual' | 'auto'>('manual')
+  const [autoRandomCategoryId, setAutoRandomCategoryId] = useState('')
+  const [autoRandomCount, setAutoRandomCount] = useState('')
 
   // Quill modules
   const quillModules = {
@@ -155,6 +308,193 @@ export function GroupDashboard() {
       ['link', 'image'],
       ['clean']
     ],
+  }
+
+  // Sync group data from Firestore when group is selected
+  const syncGroupFromCloud = async (groupId: string) => {
+    console.log('Syncing from cloud for group:', groupId)
+    try {
+      // Sync group info
+      const groupRef = doc(db, 'groups', groupId)
+      const groupSnap = await getDoc(groupRef)
+      if (groupSnap.exists()) {
+        const cloudGroup = groupSnap.data() as Group
+        updateGroup(cloudGroup)
+        console.log('Group synced:', cloudGroup.name)
+      }
+      
+      // Get current state to check for duplicates
+      const currentTopics = useGroupStore.getState().topics
+      const currentContentItems = useGroupStore.getState().contentItems
+      const currentMCQs = useGroupStore.getState().groupMCQs
+      const currentCategories = useGroupStore.getState().questionCategories
+      
+      // Sync topics (only add if not exists, otherwise update)
+      const topicsQuery = query(collection(db, 'topics'), where('groupId', '==', groupId))
+      const topicsSnap = await getDocs(topicsQuery)
+      console.log('Topics found:', topicsSnap.size)
+      topicsSnap.forEach(docSnap => {
+        const cloudTopic = docSnap.data() as GroupTopic
+        const exists = currentTopics.find(t => t.id === cloudTopic.id)
+        if (exists) {
+          updateTopic(cloudTopic)
+        } else {
+          addTopic(cloudTopic)
+        }
+      })
+      
+      // Sync content items (only add if not exists, otherwise update)
+      const contentQuery = query(collection(db, 'contentItems'), where('groupId', '==', groupId))
+      const contentSnap = await getDocs(contentQuery)
+      console.log('Content items found:', contentSnap.size)
+      contentSnap.forEach(docSnap => {
+        const cloudItem = docSnap.data() as GroupContentItem
+        console.log('Cloud item:', cloudItem.title, '| Content length:', cloudItem.content?.length || 0, '| Content preview:', cloudItem.content?.substring(0, 100))
+        const exists = currentContentItems.find(ci => ci.id === cloudItem.id)
+        if (exists) {
+          updateContentItem(cloudItem)
+        } else {
+          addContentItem(cloudItem)
+        }
+      })
+      
+      // Sync MCQs (only add if not exists - no update function available)
+      const mcqQuery = query(collection(db, 'mcqs'), where('groupId', '==', groupId))
+      const mcqSnap = await getDocs(mcqQuery)
+      console.log('MCQs found:', mcqSnap.size)
+      mcqSnap.forEach(docSnap => {
+        const cloudMCQ = docSnap.data() as GroupMCQ
+        const exists = currentMCQs.find(m => m.id === cloudMCQ.id)
+        if (!exists) {
+          addGroupMCQ(cloudMCQ)
+        }
+      })
+      
+      // Sync categories (only add if not exists - no update function available)
+      const catQuery = query(collection(db, 'categories'), where('groupId', '==', groupId))
+      const catSnap = await getDocs(catQuery)
+      console.log('Categories found:', catSnap.size)
+      catSnap.forEach(docSnap => {
+        const cloudCat = docSnap.data() as GroupQuestionCategory
+        const exists = currentCategories.find(c => c.id === cloudCat.id)
+        if (!exists) {
+          addQuestionCategory(cloudCat)
+        }
+      })
+      
+      console.log('Sync complete!')
+    } catch (err) {
+      console.error('Error syncing from Firestore:', err)
+    }
+  }
+
+  // Auto-sync when active group changes
+  useEffect(() => {
+    if (activeGroupId) {
+      syncGroupFromCloud(activeGroupId)
+    }
+  }, [activeGroupId])
+
+  // Load Auto Test config when group changes
+  useEffect(() => {
+    if (activeGroupId) {
+      const config = getAutoLiveTestConfig(activeGroupId)
+      if (config) {
+        setAutoTestEnabled(config.enabled)
+        setAutoTestTitle(config.title)
+        setAutoTestCategories(config.categoryIds)
+        setAutoTestStartTime(config.startTime)
+        setAutoTestEndTime(config.endTime)
+        setAutoTestDuration(config.duration.toString())
+        setAutoTestQuestionCount(config.questionCount.toString())
+        setAutoTestDays(config.activeDays)
+        setAutoTestAutoRelease(config.autoReleaseResult)
+        setAutoTestShowSolution(config.showSolution)
+        setAutoTestShowLeaderboard(config.showLeaderboard)
+      } else {
+        // Reset to defaults
+        setAutoTestEnabled(false)
+        setAutoTestTitle('Daily Practice Test')
+        setAutoTestCategories([])
+        setAutoTestStartTime('10:00')
+        setAutoTestEndTime('22:00')
+        setAutoTestDuration('30')
+        setAutoTestQuestionCount('20')
+        setAutoTestDays([0, 1, 2, 3, 4, 5, 6])
+      }
+    }
+  }, [activeGroupId])
+
+  // Initialize Library Sample Data on first load
+  useEffect(() => {
+    if (librarySubjects.length === 0) {
+      initLibrarySampleData()
+    }
+  }, [])
+
+  // Load user's groups from Firebase on startup
+  useEffect(() => {
+    const loadUserGroups = async () => {
+      if (!user?.id) return
+      
+      try {
+        // Query groups where user is a member
+        const q = query(
+          collection(db, 'groups'),
+          where('memberIds', 'array-contains', user.id)
+        )
+        const snapshot = await getDocs(q)
+        const groups: Group[] = []
+        snapshot.forEach(doc => {
+          groups.push({ id: doc.id, ...doc.data() } as Group)
+        })
+        
+        if (groups.length > 0) {
+          setMyGroups(groups)
+          console.log('Loaded', groups.length, 'groups from Firebase')
+        }
+      } catch (err) {
+        console.error('Error loading groups from Firebase:', err)
+      }
+    }
+    
+    loadUserGroups()
+  }, [user?.id])
+
+  // Helper function to convert Google Drive/Docs links to embeddable format
+  const convertToEmbedUrl = (url: string): string => {
+    // Google Drive file link: https://drive.google.com/file/d/FILE_ID/view
+    const driveFileMatch = url.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/)
+    if (driveFileMatch) {
+      return `https://drive.google.com/file/d/${driveFileMatch[1]}/preview`
+    }
+    
+    // Google Drive open link: https://drive.google.com/open?id=FILE_ID
+    const driveOpenMatch = url.match(/drive\.google\.com\/open\?id=([a-zA-Z0-9_-]+)/)
+    if (driveOpenMatch) {
+      return `https://drive.google.com/file/d/${driveOpenMatch[1]}/preview`
+    }
+    
+    // Google Docs: https://docs.google.com/document/d/DOC_ID/edit
+    const docsMatch = url.match(/docs\.google\.com\/document\/d\/([a-zA-Z0-9_-]+)/)
+    if (docsMatch) {
+      return `https://docs.google.com/document/d/${docsMatch[1]}/preview`
+    }
+    
+    // Google Sheets: https://docs.google.com/spreadsheets/d/SHEET_ID/edit
+    const sheetsMatch = url.match(/docs\.google\.com\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/)
+    if (sheetsMatch) {
+      return `https://docs.google.com/spreadsheets/d/${sheetsMatch[1]}/preview`
+    }
+    
+    // Google Slides: https://docs.google.com/presentation/d/PRES_ID/edit
+    const slidesMatch = url.match(/docs\.google\.com\/presentation\/d\/([a-zA-Z0-9_-]+)/)
+    if (slidesMatch) {
+      return `https://docs.google.com/presentation/d/${slidesMatch[1]}/embed`
+    }
+    
+    // Return original URL if no conversion needed
+    return url
   }
 
   // Get active group
@@ -176,6 +516,11 @@ export function GroupDashboard() {
     [activeGroupId, groupMCQs]
   )
   
+  const groupCategories = useMemo(() =>
+    activeGroupId ? getCategoriesByGroup(activeGroupId) : [],
+    [activeGroupId, questionCategories]
+  )
+  
   const latestNotes = useMemo(() =>
     activeGroupId ? getLatestNotes(activeGroupId, 5) : [],
     [activeGroupId, contentItems]
@@ -189,11 +534,26 @@ export function GroupDashboard() {
     [activeGroupId, deleteRequests]
   )
 
+  // Pending reports for current user (as content creator)
+  const pendingReportsForMe = useMemo(() =>
+    user ? getReportsByCreator(user.id).filter(r => r.groupId === activeGroupId) : [],
+    [user, activeGroupId]
+  )
+
   // Get current user's role in the group
   const getCurrentUserRole = (): 'admin' | 'moderator' | 'member' => {
     if (!activeGroup || !user) return 'member'
     const member = activeGroup.members.find(m => m.userId === user.id)
     return member?.role || 'member'
+  }
+  
+  // Check if user can edit a specific topic
+  const canEditTopic = (topic: GroupTopic): boolean => {
+    if (!user) return false
+    // Admin can always edit
+    if (isAdmin) return true
+    // Check if user is assigned to this topic
+    return topic.assignedMembers?.includes(user.id) || false
   }
 
   // Create delete request (instead of direct delete)
@@ -262,8 +622,279 @@ export function GroupDashboard() {
     resolveDeleteRequest(request.id, true)
   }
 
+  // Question Bank handlers
+  const handleAddCategory = async () => {
+    if (!newCategoryName.trim() || !activeGroupId) return
+    const category: GroupQuestionCategory = {
+      id: uuidv4(),
+      groupId: activeGroupId,
+      name: newCategoryName.trim(),
+      createdAt: Date.now(),
+    }
+    addQuestionCategory(category)
+    setNewCategoryName('')
+    
+    // Save to Firestore
+    try {
+      await setDoc(doc(db, 'categories', category.id), category)
+    } catch (err) {
+      console.error('Error saving category to Firestore:', err)
+    }
+  }
+
+  const handleAddQuestion = async () => {
+    if (!qbQuestion.trim() || !qbCategoryId || !activeGroupId || !user) return
+    if (qbOptions.some(o => !o.trim())) {
+      alert('Please fill all options')
+      return
+    }
+    const mcq: GroupMCQ = {
+      id: uuidv4(),
+      groupId: activeGroupId,
+      categoryId: qbCategoryId,
+      question: qbQuestion.trim(),
+      options: qbOptions.map(o => o.trim()),
+      correctIndex: qbCorrect,
+      createdBy: user.id,
+      createdByName: user.displayName,
+      createdAt: Date.now(),
+    }
+    addGroupMCQ(mcq)
+    setQbQuestion('')
+    setQbOptions(['', '', '', ''])
+    setQbCorrect(0)
+    
+    // Save to Firestore
+    try {
+      await setDoc(doc(db, 'mcqs', mcq.id), mcq)
+    } catch (err) {
+      console.error('Error saving MCQ to Firestore:', err)
+    }
+  }
+
+  // Group Upload - Parse Excel file
+  const parseExcelFile = async (file: File) => {
+    setGroupUploadLoading(true)
+    setGroupUploadError('')
+    try {
+      const data = await file.arrayBuffer()
+      const workbook = XLSX.read(data)
+      const sheetName = workbook.SheetNames[0]
+      const worksheet = workbook.Sheets[sheetName]
+      const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as string[][]
+      
+      // Find header row (first row with data)
+      const headerRow = jsonData.find(row => row.some(cell => cell))
+      if (!headerRow) {
+        setGroupUploadError('Empty file or no header found')
+        return
+      }
+      
+      // Parse questions (skip header)
+      const questions: Array<{ question: string; options: string[]; correctIndex: number }> = []
+      
+      for (let i = 1; i < jsonData.length; i++) {
+        const row = jsonData[i]
+        if (!row || !row[0]) continue
+        
+        // Expected format: Question | Option A | Option B | Option C | Option D | Correct Answer (A/B/C/D or 1/2/3/4)
+        const question = String(row[0] || '').trim()
+        const optionA = String(row[1] || '').trim()
+        const optionB = String(row[2] || '').trim()
+        const optionC = String(row[3] || '').trim()
+        const optionD = String(row[4] || '').trim()
+        const correctAnswer = String(row[5] || '').trim().toUpperCase()
+        
+        if (!question || !optionA || !optionB || !optionC || !optionD) continue
+        
+        let correctIndex = 0
+        if (correctAnswer === 'A' || correctAnswer === '1') correctIndex = 0
+        else if (correctAnswer === 'B' || correctAnswer === '2') correctIndex = 1
+        else if (correctAnswer === 'C' || correctAnswer === '3') correctIndex = 2
+        else if (correctAnswer === 'D' || correctAnswer === '4') correctIndex = 3
+        
+        questions.push({
+          question,
+          options: [optionA, optionB, optionC, optionD],
+          correctIndex
+        })
+      }
+      
+      if (questions.length === 0) {
+        setGroupUploadError('No valid questions found. Format: Question | Option 1 | Option 2 | Option 3 | Option 4 | Correct (1/2/3/4)')
+      } else {
+        setGroupUploadParsedQuestions(questions)
+      }
+    } catch (err) {
+      console.error('Excel parse error:', err)
+      setGroupUploadError('Error parsing Excel file')
+    } finally {
+      setGroupUploadLoading(false)
+    }
+  }
+
+  // Group Upload - Parse Word file
+  const parseWordFile = async (file: File) => {
+    setGroupUploadLoading(true)
+    setGroupUploadError('')
+    try {
+      const arrayBuffer = await file.arrayBuffer()
+      const result = await mammoth.extractRawText({ arrayBuffer })
+      const text = result.value
+      
+      // Parse questions from text
+      // Expected format:
+      // 1. Question text
+      // 1) Option 1
+      // 2) Option 2
+      // 3) Option 3
+      // 4) Option 4
+      // Ans: 1 (or Answer: 1, or সঠিক উত্তর: ১)
+      
+      const questions: Array<{ question: string; options: string[]; correctIndex: number }> = []
+      
+      // Split by question numbers (1., 2., 3., etc. or ১., ২., ৩.)
+      const questionBlocks = text.split(/(?=\n\s*(?:\d+|[১২৩৪৫৬৭৮৯০]+)[\.\)]\s*)/g)
+      
+      for (const block of questionBlocks) {
+        if (!block.trim()) continue
+        
+        const lines = block.split('\n').map(l => l.trim()).filter(l => l)
+        if (lines.length < 5) continue
+        
+        // First line is question (remove number prefix)
+        const questionLine = lines[0].replace(/^(?:\d+|[১২৩৪৫৬৭৮৯০]+)[\.\)]\s*/, '').trim()
+        if (!questionLine) continue
+        
+        // Find options - supports both 1/2/3/4 and A/B/C/D formats
+        const optionPatterns = [
+          /^[1১AaAক][\.\)\s]/,
+          /^[2২BbBখ][\.\)\s]/,
+          /^[3৩CcCগ][\.\)\s]/,
+          /^[4৪DdDঘ][\.\)\s]/
+        ]
+        
+        const options: string[] = ['', '', '', '']
+        let correctIndex = 0
+        
+        for (const line of lines.slice(1)) {
+          // Check if this is an answer line - supports 1/2/3/4 and A/B/C/D
+          const answerMatch = line.match(/(?:Ans|Answer|উত্তর|সঠিক উত্তর|Correct)[:\s]*([1234১২৩৪AaBbCcDd])/i)
+          if (answerMatch) {
+            const ans = answerMatch[1].toUpperCase()
+            if (ans === '1' || ans === '১' || ans === 'A') correctIndex = 0
+            else if (ans === '2' || ans === '২' || ans === 'B') correctIndex = 1
+            else if (ans === '3' || ans === '৩' || ans === 'C') correctIndex = 2
+            else if (ans === '4' || ans === '৪' || ans === 'D') correctIndex = 3
+            continue
+          }
+          
+          // Check for * marked correct answer
+          if (line.startsWith('*')) {
+            const optLine = line.substring(1).trim()
+            for (let i = 0; i < optionPatterns.length; i++) {
+              if (optionPatterns[i].test(optLine)) {
+                options[i] = optLine.replace(optionPatterns[i], '').trim()
+                correctIndex = i
+                break
+              }
+            }
+            continue
+          }
+          
+          // Check which option this is
+          for (let i = 0; i < optionPatterns.length; i++) {
+            if (optionPatterns[i].test(line)) {
+              options[i] = line.replace(optionPatterns[i], '').trim()
+              break
+            }
+          }
+        }
+        
+        // Validate we have all options
+        if (questionLine && options.every(o => o)) {
+          questions.push({
+            question: questionLine,
+            options,
+            correctIndex
+          })
+        }
+      }
+      
+      if (questions.length === 0) {
+        setGroupUploadError('No valid questions found. Check the format.')
+      } else {
+        setGroupUploadParsedQuestions(questions)
+      }
+    } catch (err) {
+      console.error('Word parse error:', err)
+      setGroupUploadError('Error parsing Word file')
+    } finally {
+      setGroupUploadLoading(false)
+    }
+  }
+
+  // Handle file selection
+  const handleGroupUploadFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    
+    setGroupUploadFile(file)
+    setGroupUploadParsedQuestions([])
+    setGroupUploadError('')
+    
+    const ext = file.name.split('.').pop()?.toLowerCase()
+    if (ext === 'xlsx' || ext === 'xls') {
+      parseExcelFile(file)
+    } else if (ext === 'docx') {
+      parseWordFile(file)
+    } else {
+      setGroupUploadError('Unsupported file type. Use .xlsx, .xls, or .docx')
+    }
+  }
+
+  // Save all parsed questions
+  const handleGroupUploadSave = async () => {
+    if (!groupUploadCategory || !activeGroupId || !user || groupUploadParsedQuestions.length === 0) return
+    
+    setGroupUploadLoading(true)
+    try {
+      for (const q of groupUploadParsedQuestions) {
+        const mcq: GroupMCQ = {
+          id: uuidv4(),
+          groupId: activeGroupId,
+          categoryId: groupUploadCategory,
+          question: q.question,
+          options: q.options,
+          correctIndex: q.correctIndex,
+          createdBy: user.id,
+          createdByName: user.displayName,
+          createdAt: Date.now(),
+        }
+        addGroupMCQ(mcq)
+        await setDoc(doc(db, 'mcqs', mcq.id), mcq)
+      }
+      
+      alert(`✅ ${groupUploadParsedQuestions.length} questions uploaded successfully!`)
+      setGroupUploadFile(null)
+      setGroupUploadParsedQuestions([])
+      setGroupUploadCategory('')
+    } catch (err) {
+      console.error('Error saving questions:', err)
+      setGroupUploadError('Error saving questions to database')
+    } finally {
+      setGroupUploadLoading(false)
+    }
+  }
+
+  const toggleQbCategory = (categoryId: string) => {
+    setExpandedQbCategories(prev => 
+      prev.includes(categoryId) ? prev.filter(id => id !== categoryId) : [...prev, categoryId]
+    )
+  }
+
   // Handlers
-  const handleCreateGroup = () => {
+  const handleCreateGroup = async () => {
     if (!newGroupName.trim() || !user) return
     const newGroup: Group = {
       id: uuidv4(),
@@ -276,6 +907,14 @@ export function GroupDashboard() {
       members: [{ userId: user.id, name: user.displayName, role: 'admin', joinedAt: Date.now() }],
       createdAt: Date.now(),
     }
+    
+    // Save to Firestore for cross-browser access
+    try {
+      await setDoc(doc(db, 'groups', newGroup.id), newGroup)
+    } catch (err) {
+      console.error('Error saving to Firestore:', err)
+    }
+    
     addGroup(newGroup)
     setActiveGroup(newGroup.id)
     setNewGroupName('')
@@ -283,14 +922,79 @@ export function GroupDashboard() {
     setShowCreateGroup(false)
   }
 
-  const handleJoinGroup = () => {
+  const handleJoinGroup = async () => {
     if (!joinCode.trim() || !user) return
-    alert('Group joining will be implemented with Firestore.')
+    
+    // First try local registry
+    let groupToJoin: Group | undefined = findGroupByCode(joinCode.trim())
+    
+    // If not found locally, search Firestore
+    if (!groupToJoin) {
+      try {
+        const q = query(collection(db, 'groups'), where('groupCode', '==', joinCode.trim().toUpperCase()))
+        const querySnapshot = await getDocs(q)
+        if (!querySnapshot.empty) {
+          groupToJoin = querySnapshot.docs[0].data() as Group
+        }
+      } catch (err) {
+        console.error('Error fetching from Firestore:', err)
+      }
+    }
+    
+    if (!groupToJoin) {
+      alert('Invalid group code. Please check and try again.')
+      return
+    }
+    
+    // Check if already a member
+    if (groupToJoin.memberIds.includes(user.id)) {
+      alert('You are already a member of this group!')
+      setJoinCode('')
+      setShowJoinGroup(false)
+      setActiveGroup(groupToJoin.id)
+      return
+    }
+    
+    // Add user to group
+    const updatedGroup: Group = {
+      ...groupToJoin,
+      memberIds: [...groupToJoin.memberIds, user.id],
+      members: [
+        ...groupToJoin.members,
+        {
+          userId: user.id,
+          name: user.displayName,
+          role: 'member',
+          joinedAt: Date.now()
+        }
+      ]
+    }
+    
+    // Update in Firestore
+    try {
+      await updateDoc(doc(db, 'groups', updatedGroup.id), {
+        memberIds: updatedGroup.memberIds,
+        members: updatedGroup.members
+      })
+    } catch (err) {
+      console.error('Error updating Firestore:', err)
+    }
+    
+    // Update in registry and add to myGroups
+    updateGroup(updatedGroup)
+    
+    // Also add to myGroups if not already there
+    if (!myGroups.some(g => g.id === updatedGroup.id)) {
+      addGroup(updatedGroup)
+    }
+    
+    setActiveGroup(updatedGroup.id)
     setJoinCode('')
     setShowJoinGroup(false)
+    alert(`Successfully joined "${groupToJoin.name}"!`)
   }
 
-  const handleAddTopic = () => {
+  const handleAddTopic = async () => {
     if (!newTopicName.trim() || !activeGroupId) return
     const topic: GroupTopic = {
       id: uuidv4(),
@@ -301,6 +1005,13 @@ export function GroupDashboard() {
     }
     addTopic(topic)
     setNewTopicName('')
+    
+    // Save to Firestore
+    try {
+      await setDoc(doc(db, 'topics', topic.id), topic)
+    } catch (err) {
+      console.error('Error saving topic to Firestore:', err)
+    }
   }
 
   const handleAddChapterItem = (topicId: string) => {
@@ -319,6 +1030,7 @@ export function GroupDashboard() {
       type: finalType,
       title: newItemName.trim(),
       content: '',
+      source: 'user',  // User-created content
       createdBy: user.id,
       createdByName: user.displayName,
       createdAt: Date.now(),
@@ -402,7 +1114,29 @@ export function GroupDashboard() {
     
     let content = itemDetailContent
     if (newItemType === 'link') {
-      content = `<iframe src="${itemDetailUrl}" width="100%" height="500" frameborder="0"></iframe>`
+      // Convert Google Drive/Docs links to embeddable format
+      const embedUrl = convertToEmbedUrl(itemDetailUrl)
+      content = `<iframe src="${embedUrl}" width="100%" height="500" frameborder="0" allow="autoplay"></iframe>`
+    }
+    
+    // For Quiz - save based on selection mode
+    if (newItemType === 'quiz') {
+      if (quizSelectionMode === 'auto' && autoRandomCategoryId && autoRandomCount) {
+        // Auto Random Mode - save category and count for dynamic random selection each time
+        content = JSON.stringify({
+          timeLimit: quizTimeLimit ? parseInt(quizTimeLimit) : null,
+          mode: 'auto',
+          categoryId: autoRandomCategoryId,  // 'all' or specific category id
+          questionCount: parseInt(autoRandomCount),
+        })
+      } else {
+        // Manual Mode - save fixed question IDs
+        content = JSON.stringify({
+          timeLimit: quizTimeLimit ? parseInt(quizTimeLimit) : null,
+          mode: 'manual',
+          questionIds: selectedQBQuestions,
+        })
+      }
     }
     
     // Upload files if any
@@ -436,6 +1170,7 @@ export function GroupDashboard() {
       type: finalType,
       title: itemDetailTitle.trim(),
       content: content,
+      source: 'user',  // User-created content
       order: maxOrder + 1,
       createdBy: user.id,
       createdByName: user.displayName,
@@ -444,11 +1179,24 @@ export function GroupDashboard() {
     }
     addContentItem(item)
     
+    // Save to Firestore
+    try {
+      await setDoc(doc(db, 'contentItems', item.id), item)
+      console.log('Content saved successfully:', item.title, '| Content length:', item.content?.length)
+    } catch (err) {
+      console.error('Error saving content to Firestore:', err)
+      alert('❌ Content save করতে সমস্যা হয়েছে! কনসোল চেক করুন।')
+    }
+    
     // Reset all
     setItemDetailTitle('')
     setItemDetailContent('')
     setItemDetailUrl('')
     setQuizTimeLimit('')
+    setSelectedQBQuestions([])
+    setQuizSelectionMode('manual')
+    setAutoRandomCategoryId('')
+    setAutoRandomCount('')
     setUploadedFiles([])
     setShowItemDetailModal(false)
     setShowAddItemModal(false)
@@ -460,9 +1208,12 @@ export function GroupDashboard() {
       alert('Please fill all fields')
       return
     }
+    // Use first category or create default
+    const defaultCategory = groupCategories[0]?.id || 'uncategorized'
     const mcq: GroupMCQ = {
       id: uuidv4(),
       groupId: activeGroupId,
+      categoryId: defaultCategory,
       subTopicId: topicId,
       question: mcqQuestion.trim(),
       options: mcqOptions.map(o => o.trim()),
@@ -482,6 +1233,57 @@ export function GroupDashboard() {
     if (activeGroup) {
       navigator.clipboard.writeText(activeGroup.groupCode)
       alert('Group code copied!')
+    }
+  }
+
+  // Sync existing group to Firestore (for groups created before Firestore was added)
+  const syncGroupToCloud = async () => {
+    if (!activeGroup) return
+    try {
+      await setDoc(doc(db, 'groups', activeGroup.id), activeGroup)
+      alert('Group synced to cloud! Now others can join with the code.')
+    } catch (err) {
+      console.error('Error syncing to Firestore:', err)
+      alert('Error syncing. Please try again.')
+    }
+  }
+
+  // Sync ALL group data to cloud (topics, content, MCQs, categories)
+  const syncAllToCloud = async () => {
+    if (!activeGroup || !activeGroupId) return
+    
+    try {
+      // Sync group
+      await setDoc(doc(db, 'groups', activeGroup.id), activeGroup)
+      
+      // Sync all topics for this group
+      const groupTopicsList = topics.filter(t => t.groupId === activeGroupId)
+      for (const topic of groupTopicsList) {
+        await setDoc(doc(db, 'topics', topic.id), topic)
+      }
+      
+      // Sync all content items for this group
+      const groupContentList = contentItems.filter(c => c.groupId === activeGroupId)
+      for (const item of groupContentList) {
+        await setDoc(doc(db, 'contentItems', item.id), item)
+      }
+      
+      // Sync all MCQs for this group
+      const groupMCQsList = groupMCQs.filter(m => m.groupId === activeGroupId)
+      for (const mcq of groupMCQsList) {
+        await setDoc(doc(db, 'mcqs', mcq.id), mcq)
+      }
+      
+      // Sync all categories for this group
+      const groupCatsList = questionCategories.filter(c => c.groupId === activeGroupId)
+      for (const cat of groupCatsList) {
+        await setDoc(doc(db, 'categories', cat.id), cat)
+      }
+      
+      alert(`Synced to cloud!\n- ${groupTopicsList.length} chapters\n- ${groupContentList.length} content items\n- ${groupMCQsList.length} MCQs\n- ${groupCatsList.length} categories`)
+    } catch (err) {
+      console.error('Error syncing all to Firestore:', err)
+      alert('Error syncing. Please try again.')
     }
   }
 
@@ -510,33 +1312,383 @@ export function GroupDashboard() {
   }
 
   // Live Test handlers
-  const startLiveTest = () => {
-    if (groupMCQList.length === 0) {
-      alert('No questions available!')
+  
+  // Get Live Tests for this group
+  const upcomingLiveTests = useMemo(() => {
+    if (!activeGroupId) return []
+    return getUpcomingLiveTests(activeGroupId)
+  }, [activeGroupId, liveTests])
+  
+  const activeLiveTest = useMemo(() => {
+    if (!activeGroupId) return undefined
+    return getActiveLiveTest(activeGroupId)
+  }, [activeGroupId, liveTests])
+  
+  const pastLiveTests = useMemo(() => {
+    if (!activeGroupId) return []
+    return getPastLiveTests(activeGroupId)
+  }, [activeGroupId, liveTests])
+  
+  // Create Live Test
+  const handleCreateLiveTest = () => {
+    if (!newLiveTestTitle.trim() || !newLiveTestStartDate || !newLiveTestStartTime || !newLiveTestEndDate || !newLiveTestEndTime) {
+      alert('Please fill all required fields')
       return
     }
-    const shuffled = [...groupMCQList].sort(() => Math.random() - 0.5).slice(0, 20)
-    setTestQuestions(shuffled)
-    setCurrentQuestion(0)
-    setSelectedAnswers({})
-    setIsTestRunning(true)
-    setShowTestResults(false)
+    
+    const startTime = new Date(`${newLiveTestStartDate}T${newLiveTestStartTime}`).getTime()
+    const endTime = new Date(`${newLiveTestEndDate}T${newLiveTestEndTime}`).getTime()
+    
+    if (endTime <= startTime) {
+      alert('End time must be after start time')
+      return
+    }
+    
+    // Get questions based on mode
+    let questionIds: string[] = []
+    if (newLiveTestMode === 'auto') {
+      let availableQuestions = groupMCQList
+      if (newLiveTestCategories.length > 0) {
+        availableQuestions = groupMCQList.filter(q => newLiveTestCategories.includes(q.categoryId || ''))
+      }
+      const count = Math.min(parseInt(newLiveTestQuestionCount), availableQuestions.length)
+      const shuffled = [...availableQuestions].sort(() => Math.random() - 0.5)
+      questionIds = shuffled.slice(0, count).map(q => q.id)
+    }
+    
+    const liveTest: LiveTest = {
+      id: uuidv4(),
+      groupId: activeGroup!.id,
+      title: newLiveTestTitle.trim(),
+      startTime,
+      endTime,
+      duration: parseInt(newLiveTestDuration),
+      questionMode: newLiveTestMode,
+      categoryIds: newLiveTestMode === 'auto' ? newLiveTestCategories : undefined,
+      questionCount: newLiveTestMode === 'auto' ? parseInt(newLiveTestQuestionCount) : undefined,
+      questionIds,
+      autoReleaseResult: newLiveTestAutoRelease,
+      showSolution: newLiveTestShowSolution,
+      showLeaderboard: newLiveTestShowLeaderboard,
+      status: 'scheduled',
+      createdBy: user!.id,
+      createdByName: user!.displayName || 'Admin',
+      createdAt: Date.now()
+    }
+    
+    addLiveTest(liveTest)
+    
+    // Reset form
+    setShowCreateLiveTest(false)
+    setNewLiveTestTitle('')
+    setNewLiveTestStartDate('')
+    setNewLiveTestStartTime('')
+    setNewLiveTestEndDate('')
+    setNewLiveTestEndTime('')
+    setNewLiveTestDuration('30')
+    setNewLiveTestMode('auto')
+    setNewLiveTestCategories([])
+    setNewLiveTestQuestionCount('20')
+    setNewLiveTestAutoRelease(true)
+    setNewLiveTestShowSolution(true)
+    setNewLiveTestShowLeaderboard(true)
+    
+    alert('Live Test scheduled successfully!')
   }
-
-  const submitTest = () => {
-    setIsTestRunning(false)
-    setShowTestResults(true)
+  
+  // Save Auto Daily Test Config
+  const handleSaveAutoTestConfig = () => {
+    if (!activeGroupId || !user) return
+    
+    if (autoTestEnabled && autoTestCategories.length === 0) {
+      alert('Please select at least one category for Auto Test')
+      return
+    }
+    
+    const config = {
+      id: `auto-${activeGroupId}`,
+      groupId: activeGroupId,
+      enabled: autoTestEnabled,
+      title: autoTestTitle,
+      categoryIds: autoTestCategories,
+      startTime: autoTestStartTime,
+      endTime: autoTestEndTime,
+      duration: parseInt(autoTestDuration),
+      questionCount: parseInt(autoTestQuestionCount),
+      activeDays: autoTestDays,
+      autoReleaseResult: autoTestAutoRelease,
+      showSolution: autoTestShowSolution,
+      showLeaderboard: autoTestShowLeaderboard,
+      createdBy: user.id,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    }
+    
+    setAutoLiveTestConfig(config)
+    alert('Auto Daily Test settings saved!')
   }
-
-  const getTestScore = () => {
+  
+  // Check if Auto Test is currently active
+  const isAutoTestActive = useMemo(() => {
+    if (!activeGroupId) return false
+    const config = getAutoLiveTestConfig(activeGroupId)
+    if (!config || !config.enabled) return false
+    
+    const now = new Date()
+    const currentDay = now.getDay()
+    if (!config.activeDays.includes(currentDay)) return false
+    
+    const currentTime = now.getHours() * 60 + now.getMinutes()
+    const [startH, startM] = config.startTime.split(':').map(Number)
+    const [endH, endM] = config.endTime.split(':').map(Number)
+    const startMinutes = startH * 60 + startM
+    const endMinutes = endH * 60 + endM
+    
+    return currentTime >= startMinutes && currentTime <= endMinutes
+  }, [activeGroupId, autoTestEnabled])
+  
+  // Get current Auto Test config
+  const currentAutoTestConfig = useMemo(() => {
+    if (!activeGroupId) return null
+    return getAutoLiveTestConfig(activeGroupId)
+  }, [activeGroupId, autoTestEnabled])
+  
+  // Start Live Test
+  const startLiveTest = (test: LiveTest) => {
+    // Check if user already has a result
+    const existingResult = getUserLiveTestResult(test.id, user!.id)
+    if (existingResult && existingResult.status !== 'in-progress') {
+      alert('You have already submitted this test')
+      return
+    }
+    
+    // Get questions
+    const questions = groupMCQs.filter(m => test.questionIds.includes(m.id))
+    if (questions.length === 0) {
+      alert('No questions found for this test')
+      return
+    }
+    
+    // Shuffle questions
+    const shuffled = [...questions].sort(() => Math.random() - 0.5)
+    
+    setLiveTestQuestions(shuffled)
+    setLiveTestCurrentQ(0)
+    setLiveTestAnswers(existingResult?.answers.reduce((acc, a) => {
+      if (a.selected !== null) acc[a.questionId] = a.selected
+      return acc
+    }, {} as Record<string, number>) || {})
+    setLiveTestStartedAt(existingResult?.startedAt || Date.now())
+    setRunningLiveTest(test)
+    
+    // Create or update result
+    if (!existingResult) {
+      const newResult: LiveTestResult = {
+        id: uuidv4(),
+        liveTestId: test.id,
+        groupId: test.groupId,
+        userId: user!.id,
+        userName: user!.displayName || 'User',
+        startedAt: Date.now(),
+        score: 0,
+        correct: 0,
+        wrong: 0,
+        unanswered: test.questionIds.length,
+        total: test.questionIds.length,
+        timeTaken: 0,
+        answers: test.questionIds.map(qId => ({ questionId: qId, selected: null, correct: groupMCQs.find(m => m.id === qId)?.correctIndex || 0 })),
+        status: 'in-progress'
+      }
+      addLiveTestResult(newResult)
+    }
+  }
+  
+  // Submit Live Test
+  const submitLiveTest = () => {
+    if (!runningLiveTest) return
+    
+    const timeTaken = Math.round((Date.now() - liveTestStartedAt) / 1000)
+    
     let correct = 0
-    testQuestions.forEach(q => {
-      if (selectedAnswers[q.id] === q.correctIndex) correct++
+    let wrong = 0
+    let unanswered = 0
+    
+    const answers = liveTestQuestions.map(q => {
+      const selected = liveTestAnswers[q.id] !== undefined ? liveTestAnswers[q.id] : null
+      if (selected === null) {
+        unanswered++
+      } else if (selected === q.correctIndex) {
+        correct++
+      } else {
+        wrong++
+      }
+      return { questionId: q.id, selected, correct: q.correctIndex }
     })
-    return correct
+    
+    const score = Math.round((correct / liveTestQuestions.length) * 100)
+    
+    // Update result
+    const existingResult = getUserLiveTestResult(runningLiveTest.id, user!.id)
+    if (existingResult) {
+      const updatedResult: LiveTestResult = {
+        ...existingResult,
+        submittedAt: Date.now(),
+        score,
+        correct,
+        wrong,
+        unanswered,
+        timeTaken,
+        answers,
+        status: 'submitted'
+      }
+      updateLiveTestResult(updatedResult)
+      setViewingLiveTestResult(updatedResult)
+    }
+    
+    setRunningLiveTest(null)
+    setLiveTestQuestions([])
+    setLiveTestTab('results')
+  }
+  
+  // Check if result should be shown for a test
+  const canViewResult = (test: LiveTest): boolean => {
+    if (test.autoReleaseResult && Date.now() > test.endTime) return true
+    if (test.status === 'result-released') return true
+    return false
+  }
+  
+  // Get user's result for a test
+  const getMyResult = (testId: string): LiveTestResult | undefined => {
+    return getUserLiveTestResult(testId, user?.id || '')
+  }
+  
+  // Format countdown
+  const formatCountdown = (targetTime: number): string => {
+    const diff = targetTime - Date.now()
+    if (diff <= 0) return 'Started'
+    
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24))
+    const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
+    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
+    
+    if (days > 0) return `${days}d ${hours}h`
+    if (hours > 0) return `${hours}h ${minutes}m`
+    return `${minutes}m`
+  }
+  
+  // Format time remaining for test
+  const formatTimeRemaining = (test: LiveTest, startedAt: number): string => {
+    const maxEndTime = Math.min(test.endTime, startedAt + test.duration * 60 * 1000)
+    const remaining = maxEndTime - Date.now()
+    
+    if (remaining <= 0) return '0:00'
+    
+    const minutes = Math.floor(remaining / 60000)
+    const seconds = Math.floor((remaining % 60000) / 1000)
+    return `${minutes}:${String(seconds).padStart(2, '0')}`
+  }
+  
+  // Start Quiz from Question Bank - Now uses GroupQuizRunner
+  const startQuizFromItem = (item: GroupContentItem) => {
+    try {
+      const quizData = JSON.parse(item.content)
+      
+      let quizQuestions: GroupMCQ[] = []
+      
+      if (quizData.mode === 'auto') {
+        // Auto Random Mode - get fresh random questions each time
+        const { categoryId, questionCount } = quizData
+        
+        let availableQuestions: GroupMCQ[]
+        if (categoryId === 'all') {
+          availableQuestions = groupMCQs.filter((m: GroupMCQ) => m.groupId === activeGroup?.id)
+        } else {
+          availableQuestions = groupMCQs.filter((m: GroupMCQ) => m.groupId === activeGroup?.id && m.categoryId === categoryId)
+        }
+        
+        if (availableQuestions.length === 0) {
+          alert('No questions available in this category.')
+          return
+        }
+        
+        // Shuffle and pick random questions
+        const shuffled = [...availableQuestions].sort(() => Math.random() - 0.5)
+        quizQuestions = shuffled.slice(0, Math.min(questionCount, shuffled.length))
+        
+      } else {
+        // Manual Mode - use fixed question IDs
+        const questionIds: string[] = quizData.questionIds || []
+        
+        if (questionIds.length === 0) {
+          alert('No questions in this quiz. Edit the quiz to add questions.')
+          return
+        }
+        
+        quizQuestions = groupMCQs.filter((m: GroupMCQ) => questionIds.includes(m.id))
+        // Shuffle the fixed questions too
+        quizQuestions = [...quizQuestions].sort(() => Math.random() - 0.5)
+      }
+      
+      if (quizQuestions.length === 0) {
+        alert('Questions not found. They may have been deleted.')
+        return
+      }
+      
+      // Use new GroupQuizRunner with result, leaderboard, etc.
+      setRunningQuiz({
+        item,
+        questions: quizQuestions,
+        timeLimit: quizData.timeLimit || null
+      })
+    } catch {
+      alert('Invalid quiz data')
+    }
+  }
+  
+  // Get quiz info from item
+  const getQuizInfo = (item: GroupContentItem) => {
+    try {
+      const quizData = JSON.parse(item.content)
+      
+      if (quizData.mode === 'auto') {
+        // For auto mode, show category info
+        const categoryName = quizData.categoryId === 'all' 
+          ? 'All Categories' 
+          : groupCategories.find(c => c.id === quizData.categoryId)?.name || 'Unknown'
+        return {
+          timeLimit: quizData.timeLimit,
+          questionCount: quizData.questionCount,
+          mode: 'auto',
+          categoryName
+        }
+      }
+      
+      return {
+        timeLimit: quizData.timeLimit,
+        questionCount: quizData.questionIds?.length || 0,
+        mode: 'manual'
+      }
+    } catch {
+      return { timeLimit: null, questionCount: 0 }
+    }
   }
 
   // Main render
+  
+  // If Quiz is running, show GroupQuizRunner fullscreen
+  if (runningQuiz) {
+    return (
+      <div className="p-6">
+        <GroupQuizRunner
+          questions={runningQuiz.questions}
+          quizItem={runningQuiz.item}
+          timeLimit={runningQuiz.timeLimit || undefined}
+          onBack={() => setRunningQuiz(null)}
+        />
+      </div>
+    )
+  }
+  
   return (
     <div className="p-6 space-y-4">
       {/* Header with Group Dropdown */}
@@ -588,13 +1740,18 @@ export function GroupDashboard() {
       ) : (
         <>
           {/* Group Info Bar */}
-          <div className="flex items-center gap-4 p-3 bg-muted/50 rounded-lg">
+          <div className="flex items-center gap-4 p-3 bg-muted/50 rounded-lg flex-wrap">
             <div className="flex items-center gap-2">
               <span className="text-sm text-muted-foreground">Code:</span>
               <code className="bg-background px-2 py-1 rounded font-mono">{activeGroup?.groupCode}</code>
               <Button variant="ghost" size="sm" className="h-7 px-2" onClick={copyGroupCode}>
                 <Copy className="h-3 w-3" />
               </Button>
+              {isAdmin && (
+                <Button variant="ghost" size="sm" className="h-7 px-2 text-blue-500" onClick={syncGroupToCloud} title="Sync to cloud for sharing">
+                  <Upload className="h-3 w-3" />
+                </Button>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <Users className="h-4 w-4 text-muted-foreground" />
@@ -624,12 +1781,11 @@ export function GroupDashboard() {
 
           {/* Tabs */}
           <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)}>
-            <TabsList className={`grid w-full ${isAdmin ? 'grid-cols-5' : 'grid-cols-4'}`}>
+            <TabsList className="grid w-full grid-cols-4">
               <TabsTrigger value="whats-new"><Sparkles className="h-4 w-4 mr-1" /> What's New</TabsTrigger>
               <TabsTrigger value="course"><BookOpen className="h-4 w-4 mr-1" /> Course</TabsTrigger>
               <TabsTrigger value="live-test"><Brain className="h-4 w-4 mr-1" /> Live Test</TabsTrigger>
-              <TabsTrigger value="members"><Users className="h-4 w-4 mr-1" /> Members</TabsTrigger>
-              {isAdmin && <TabsTrigger value="settings"><Settings className="h-4 w-4 mr-1" /> Settings</TabsTrigger>}
+              <TabsTrigger value="settings"><Settings className="h-4 w-4 mr-1" /> Settings</TabsTrigger>
             </TabsList>
 
             {/* What's New Tab */}
@@ -680,6 +1836,54 @@ export function GroupDashboard() {
                 </Card>
               </div>
 
+              {/* Pending Reports for Content Creators */}
+              {pendingReportsForMe.length > 0 && (
+                <Card className="border-orange-500/50 bg-orange-50/50 dark:bg-orange-900/10">
+                  <CardHeader>
+                    <CardTitle className="text-lg flex items-center gap-2 text-orange-600">
+                      <AlertTriangle className="h-5 w-5" /> 
+                      Correction Requests ({pendingReportsForMe.length})
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {pendingReportsForMe.map(report => (
+                      <div key={report.id} className="p-3 bg-white dark:bg-background rounded-lg border space-y-2">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <p className="font-medium text-sm">{report.contentTitle}</p>
+                            <p className="text-xs text-muted-foreground">
+                              Report by {report.reportedByName} • {new Date(report.createdAt).toLocaleDateString()}
+                            </p>
+                          </div>
+                          <span className="text-xs bg-orange-500/20 text-orange-600 px-2 py-1 rounded">
+                            {report.contentType === 'note' ? 'Notes' : report.contentType === 'quiz' ? 'Quiz' : 'Question'}
+                          </span>
+                        </div>
+                        <p className="text-sm bg-muted p-2 rounded">{report.message}</p>
+                        <div className="flex gap-2">
+                          <Button 
+                            size="sm" 
+                            variant="outline"
+                            className="text-green-600 hover:bg-green-50"
+                            onClick={() => resolveContentReport(report.id, 'resolved')}
+                          >
+                            <Check className="h-3 w-3 mr-1" /> Fixed
+                          </Button>
+                          <Button 
+                            size="sm" 
+                            variant="outline"
+                            className="text-red-600 hover:bg-red-50"
+                            onClick={() => resolveContentReport(report.id, 'dismissed')}
+                          >
+                            <XCircle className="h-3 w-3 mr-1" /> Dismiss
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </CardContent>
+                </Card>
+              )}
+
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <Card className="p-4 text-center">
                   <div className="text-2xl font-bold text-primary">{groupTopics.length}</div>
@@ -702,10 +1906,25 @@ export function GroupDashboard() {
               </div>
             </TabsContent>
 
-            {/* Course Tab - Sahityapath Style */}
-            <TabsContent value="course" className="space-y-2">
-              {/* Add new chapter button at top */}
-              {isAdmin && (
+            {/* Course Tab - Display & Edit Mode */}
+            <TabsContent value="course" className="space-y-4">
+              {/* Course Contents Header */}
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold text-lg">Course Contents</h3>
+                <div className="flex gap-2">
+                  <Button 
+                    variant={isEditMode ? 'default' : 'outline'} 
+                    size="sm"
+                    onClick={() => setIsEditMode(!isEditMode)}
+                  >
+                    <Pencil className="h-4 w-4 mr-2" />
+                    {isEditMode ? 'Exit Edit Mode' : 'Edit Mode'}
+                  </Button>
+                </div>
+              </div>
+              
+              {/* Add new chapter button - Only in Edit Mode for Admin */}
+              {isEditMode && isAdmin && (
                 <div className="flex items-center gap-2 py-2 px-3 hover:bg-muted/50 rounded cursor-pointer border-b"
                   onClick={() => {
                     const name = prompt('Enter chapter name:')
@@ -720,19 +1939,22 @@ export function GroupDashboard() {
                 </div>
               )}
 
-              {/* Chapter List - Sahityapath Style */}
+              {/* Chapter List */}
               <div className="border rounded-lg overflow-hidden bg-card">
                 {groupTopics.length === 0 ? (
                   <div className="p-8 text-center text-muted-foreground">
-                    No chapters yet. {isAdmin && 'Click "Add new chapter" above!'}
+                    No chapters yet. {isAdmin && isEditMode && 'Click "Add new chapter" above!'}
                   </div>
                 ) : (
-                  groupTopics.map((topic, topicIdx) => {
+                  groupTopics.map((topic) => {
                     const isExpanded = expandedTopics.includes(topic.id)
                     const topicContent = contentItems
                       .filter(ci => ci.topicId === topic.id)
                       .sort((a, b) => (a.order ?? a.createdAt) - (b.order ?? b.createdAt))
-                    const topicMCQs = groupMCQList.filter(m => m.subTopicId === topic.id)
+                    const canEdit = canEditTopic(topic)
+                    const assignedNames = topic.assignedMembers?.map(uid => 
+                      activeGroup?.members.find(m => m.userId === uid)?.name || 'Unknown'
+                    ).join(', ')
                     
                     return (
                       <div key={topic.id} className="border-b last:border-b-0">
@@ -748,9 +1970,15 @@ export function GroupDashboard() {
                               <ChevronRight className="h-5 w-5 text-muted-foreground" />
                             )}
                             <span className="font-semibold">{topic.name}</span>
+                            {topic.assignedMembers && topic.assignedMembers.length > 0 && (
+                              <span className="text-xs text-muted-foreground ml-2">
+                                ({assignedNames})
+                              </span>
+                            )}
                           </button>
                           
-                          {isAdmin && (
+                          {/* Edit Mode Controls */}
+                          {isEditMode && (isAdmin || canEdit) && (
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
                                 <Button variant="ghost" size="sm" className="h-8 w-8 p-0 mr-2">
@@ -758,32 +1986,46 @@ export function GroupDashboard() {
                                 </Button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end">
-                                <DropdownMenuItem onClick={() => {
-                                  setAddingToTopicId(topic.id)
-                                  setShowAddItemModal(true)
-                                }}>
-                                  <Plus className="h-4 w-4 mr-2" /> Add chapter item
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => {
-                                  const newName = prompt('Enter new chapter name:', topic.name)
-                                  if (newName?.trim()) {
-                                    updateTopic({ ...topic, name: newName.trim() })
-                                  }
-                                }}>
-                                  <Pencil className="h-4 w-4 mr-2" /> Rename
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => moveTopicUp(topic)}>
-                                  <ArrowUp className="h-4 w-4 mr-2" /> Move up
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => moveTopicDown(topic)}>
-                                  <ArrowDown className="h-4 w-4 mr-2" /> Move down
-                                </DropdownMenuItem>
-                                <DropdownMenuItem 
-                                  className="text-orange-500"
-                                  onClick={() => requestDelete('topic', topic.id, topic.name)}
-                                >
-                                  <AlertTriangle className="h-4 w-4 mr-2" /> Request Delete
-                                </DropdownMenuItem>
+                                {canEdit && (
+                                  <DropdownMenuItem onClick={() => {
+                                    setAddingToTopicId(topic.id)
+                                    setShowAddItemModal(true)
+                                  }}>
+                                    <Plus className="h-4 w-4 mr-2" /> Add content
+                                  </DropdownMenuItem>
+                                )}
+                                {isAdmin && (
+                                  <>
+                                    <DropdownMenuItem onClick={() => {
+                                      const newName = prompt('Enter new chapter name:', topic.name)
+                                      if (newName?.trim()) {
+                                        updateTopic({ ...topic, name: newName.trim() })
+                                      }
+                                    }}>
+                                      <Pencil className="h-4 w-4 mr-2" /> Rename
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem onClick={() => {
+                                      // Open assign members modal
+                                      setAssigningTopicId(topic.id)
+                                      setSelectedMemberIds(topic.assignedMembers || [])
+                                      setShowAssignModal(true)
+                                    }}>
+                                      <UserPlus className="h-4 w-4 mr-2" /> Assign members
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem onClick={() => moveTopicUp(topic)}>
+                                      <ArrowUp className="h-4 w-4 mr-2" /> Move up
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem onClick={() => moveTopicDown(topic)}>
+                                      <ArrowDown className="h-4 w-4 mr-2" /> Move down
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem 
+                                      className="text-orange-500"
+                                      onClick={() => requestDelete('topic', topic.id, topic.name)}
+                                    >
+                                      <AlertTriangle className="h-4 w-4 mr-2" /> Request Delete
+                                    </DropdownMenuItem>
+                                  </>
+                                )}
                               </DropdownMenuContent>
                             </DropdownMenu>
                           )}
@@ -792,8 +2034,8 @@ export function GroupDashboard() {
                         {/* Chapter Content - Expanded */}
                         {isExpanded && (
                           <div className="bg-muted/20">
-                            {/* Add chapter item button */}
-                            {isAdmin && (
+                            {/* Add content button - Edit Mode Only */}
+                            {isEditMode && canEdit && (
                               <div 
                                 className="flex items-center gap-2 py-2 px-8 hover:bg-muted/30 cursor-pointer text-sm border-b"
                                 onClick={() => {
@@ -802,18 +2044,33 @@ export function GroupDashboard() {
                                 }}
                               >
                                 <Plus className="h-3 w-3 text-primary" />
-                                <span className="text-primary">Add chapter item</span>
+                                <span className="text-primary">Add content</span>
                               </div>
                             )}
 
                             {/* Content Items */}
                             {topicContent.length === 0 ? (
-                              <p className="px-8 py-4 text-sm text-muted-foreground">No items yet</p>
+                              <p className="px-8 py-4 text-sm text-muted-foreground">
+                                No content yet. {isEditMode && canEdit && 'Click "Add content" to start!'}
+                              </p>
                             ) : (
                               <>
-                                {topicContent.map((item, itemIndex) => (
+                                {topicContent.map((item, itemIndex) => {
+                                  const quizInfo = item.type === 'quiz' ? getQuizInfo(item) : null
+                                  
+                                  return (
                                   <div key={item.id} className="flex items-center hover:bg-muted/30 border-b last:border-b-0">
-                                    <div className="flex-1 flex items-center gap-2 py-2 px-8">
+                                    {/* Display Mode - Click to view/interact */}
+                                    <div 
+                                      className="flex-1 flex items-center gap-2 py-2 px-8 cursor-pointer"
+                                      onClick={() => {
+                                        if (item.type === 'quiz') {
+                                          startQuizFromItem(item)
+                                        } else if (item.type === 'note') {
+                                          setViewingContent(item)
+                                        }
+                                      }}
+                                    >
                                       {item.type === 'note' && item.content ? (
                                         <FileText className="h-4 w-4 text-blue-500" />
                                       ) : item.type === 'quiz' ? (
@@ -822,9 +2079,16 @@ export function GroupDashboard() {
                                         <span className="text-muted-foreground">•</span>
                                       )}
                                       <span className="text-sm">{item.title}</span>
+                                      {quizInfo && (
+                                        <span className="text-xs text-muted-foreground ml-2">
+                                          ({quizInfo.questionCount} Q{quizInfo.timeLimit ? `, ${quizInfo.timeLimit}min` : ''}
+                                          {quizInfo.mode === 'auto' && <Shuffle className="h-3 w-3 inline ml-1" />})
+                                        </span>
+                                      )}
                                     </div>
                                     
-                                    {isAdmin && (
+                                    {/* Edit Mode Controls */}
+                                    {isEditMode && canEdit && (
                                       <DropdownMenu>
                                         <DropdownMenuTrigger asChild>
                                           <Button variant="ghost" size="sm" className="h-8 w-8 p-0 mr-2">
@@ -850,7 +2114,6 @@ export function GroupDashboard() {
                                                 const prevItem = topicContent[itemIndex - 1]
                                                 const currentOrder = item.order ?? itemIndex
                                                 const prevOrder = prevItem.order ?? (itemIndex - 1)
-                                                // Swap orders
                                                 updateContentItem({ ...item, order: prevOrder, updatedAt: Date.now() })
                                                 updateContentItem({ ...prevItem, order: currentOrder, updatedAt: Date.now() })
                                               }
@@ -865,7 +2128,6 @@ export function GroupDashboard() {
                                                 const nextItem = topicContent[itemIndex + 1]
                                                 const currentOrder = item.order ?? itemIndex
                                                 const nextOrder = nextItem.order ?? (itemIndex + 1)
-                                                // Swap orders
                                                 updateContentItem({ ...item, order: nextOrder, updatedAt: Date.now() })
                                                 updateContentItem({ ...nextItem, order: currentOrder, updatedAt: Date.now() })
                                               }
@@ -883,7 +2145,8 @@ export function GroupDashboard() {
                                       </DropdownMenu>
                                     )}
                                   </div>
-                                ))}
+                                  )
+                                })}
                               </>
                             )}
                           </div>
@@ -894,8 +2157,8 @@ export function GroupDashboard() {
                 )}
               </div>
 
-              {/* Add new chapter at bottom */}
-              {isAdmin && groupTopics.length > 0 && (
+              {/* Add new chapter at bottom - Edit Mode Only */}
+              {isEditMode && isAdmin && groupTopics.length > 0 && (
                 <div 
                   className="flex items-center gap-2 py-3 px-3 hover:bg-primary/10 rounded cursor-pointer border border-dashed"
                   onClick={() => {
@@ -920,119 +2183,1812 @@ export function GroupDashboard() {
 
             {/* Live Test Tab */}
             <TabsContent value="live-test" className="space-y-4">
-              {!isTestRunning && !showTestResults ? (
-                <Card className="p-8 text-center">
-                  <Brain className="h-16 w-16 mx-auto text-primary mb-4" />
-                  <h3 className="text-xl font-semibold mb-2">Group Live Test</h3>
-                  <p className="text-muted-foreground mb-4">{groupMCQList.length} questions available</p>
-                  <Button size="lg" onClick={startLiveTest} disabled={groupMCQList.length === 0}>
-                    <Play className="h-4 w-4 mr-2" /> Start Test
-                  </Button>
-                </Card>
-              ) : isTestRunning ? (
+              {/* If running a live test */}
+              {runningLiveTest ? (
                 <Card className="p-6">
                   <div className="flex justify-between items-center mb-4">
-                    <span className="text-sm">Question {currentQuestion + 1} / {testQuestions.length}</span>
-                    <Button variant="destructive" size="sm" onClick={submitTest}>Submit</Button>
+                    <div className="flex items-center gap-4">
+                      <span className="text-sm font-medium">Question {liveTestCurrentQ + 1} / {liveTestQuestions.length}</span>
+                      <span className="text-sm text-red-500 font-medium">
+                        <Clock className="h-4 w-4 inline mr-1" />
+                        {formatTimeRemaining(runningLiveTest, liveTestStartedAt)}
+                      </span>
+                    </div>
+                    <Button variant="destructive" size="sm" onClick={submitLiveTest}>
+                      <Check className="h-4 w-4 mr-1" /> Submit Test
+                    </Button>
                   </div>
-                  <h3 className="text-lg font-medium mb-4">{testQuestions[currentQuestion]?.question}</h3>
+                  
+                  {/* Question Navigator */}
+                  <div className="flex flex-wrap gap-2 mb-4 p-3 bg-muted/50 rounded">
+                    {liveTestQuestions.map((_, i) => (
+                      <button
+                        key={i}
+                        onClick={() => setLiveTestCurrentQ(i)}
+                        className={`w-8 h-8 rounded text-sm font-medium transition-colors ${
+                          liveTestCurrentQ === i 
+                            ? 'bg-primary text-primary-foreground' 
+                            : liveTestAnswers[liveTestQuestions[i].id] !== undefined
+                              ? 'bg-green-500 text-white'
+                              : 'bg-background border'
+                        }`}
+                      >
+                        {i + 1}
+                      </button>
+                    ))}
+                  </div>
+                  
+                  <h3 className="text-lg font-medium mb-4">{liveTestQuestions[liveTestCurrentQ]?.question}</h3>
                   <div className="space-y-2">
-                    {testQuestions[currentQuestion]?.options.map((opt, i) => (
+                    {liveTestQuestions[liveTestCurrentQ]?.options.map((opt, i) => (
                       <div 
                         key={i}
-                        className={`p-3 border rounded cursor-pointer ${
-                          selectedAnswers[testQuestions[currentQuestion].id] === i ? 'border-primary bg-primary/10' : 'hover:bg-muted'
+                        className={`p-3 border rounded cursor-pointer transition-colors ${
+                          liveTestAnswers[liveTestQuestions[liveTestCurrentQ].id] === i 
+                            ? 'border-primary bg-primary/10' 
+                            : 'hover:bg-muted'
                         }`}
-                        onClick={() => setSelectedAnswers(prev => ({ ...prev, [testQuestions[currentQuestion].id]: i }))}
+                        onClick={() => setLiveTestAnswers(prev => ({ ...prev, [liveTestQuestions[liveTestCurrentQ].id]: i }))}
                       >
-                        {String.fromCharCode(65 + i)}. {opt}
+                        <span className="font-medium mr-2">{String.fromCharCode(65 + i)}.</span> {opt}
                       </div>
                     ))}
                   </div>
                   <div className="flex justify-between pt-4">
-                    <Button variant="outline" disabled={currentQuestion === 0} onClick={() => setCurrentQuestion(p => p - 1)}>Previous</Button>
-                    {currentQuestion < testQuestions.length - 1 ? (
-                      <Button onClick={() => setCurrentQuestion(p => p + 1)}>Next</Button>
+                    <Button 
+                      variant="outline" 
+                      disabled={liveTestCurrentQ === 0} 
+                      onClick={() => setLiveTestCurrentQ(p => p - 1)}
+                    >
+                      Previous
+                    </Button>
+                    {liveTestCurrentQ < liveTestQuestions.length - 1 ? (
+                      <Button onClick={() => setLiveTestCurrentQ(p => p + 1)}>Next</Button>
                     ) : (
-                      <Button onClick={submitTest}>Submit</Button>
+                      <Button onClick={submitLiveTest}>
+                        <Check className="h-4 w-4 mr-1" /> Submit
+                      </Button>
                     )}
                   </div>
                 </Card>
-              ) : (
-                <Card className="p-8 text-center">
-                  <h3 className="text-2xl font-bold mb-2">Test Complete!</h3>
-                  <div className="text-5xl font-bold text-primary my-4">{getTestScore()}/{testQuestions.length}</div>
-                  <p className="text-muted-foreground mb-4">{Math.round((getTestScore() / testQuestions.length) * 100)}% Correct</p>
-                  <Button onClick={() => { setShowTestResults(false); setTestQuestions([]) }}>Done</Button>
+              ) : viewingLiveTestSolutions && viewingLiveTestResult ? (
+                /* View Solutions Mode */
+                <Card className="p-6">
+                  <div className="flex justify-between items-center mb-6">
+                    <h3 className="text-lg font-semibold">View Solutions</h3>
+                    <Button variant="outline" onClick={() => setViewingLiveTestSolutions(false)}>
+                      <X className="h-4 w-4 mr-1" /> Close
+                    </Button>
+                  </div>
+                  
+                  <div className="space-y-6">
+                    {viewingLiveTestResult.answers.map((ans, idx) => {
+                      const question = groupMCQs.find(q => q.id === ans.questionId)
+                      if (!question) return null
+                      
+                      const isCorrect = ans.selected === ans.correct
+                      const wasSkipped = ans.selected === null
+                      
+                      return (
+                        <div key={ans.questionId} className={`p-4 rounded-lg border ${isCorrect ? 'border-green-500 bg-green-50 dark:bg-green-950/20' : wasSkipped ? 'border-gray-400 bg-gray-50 dark:bg-gray-950/20' : 'border-red-500 bg-red-50 dark:bg-red-950/20'}`}>
+                          <div className="flex items-start justify-between mb-3">
+                            <span className="text-sm font-medium">Q{idx + 1}.</span>
+                            {isCorrect ? (
+                              <span className="text-green-600 text-sm flex items-center"><CheckCircle2 className="h-4 w-4 mr-1" /> Correct</span>
+                            ) : wasSkipped ? (
+                              <span className="text-gray-500 text-sm flex items-center"><CircleDot className="h-4 w-4 mr-1" /> Skipped</span>
+                            ) : (
+                              <span className="text-red-600 text-sm flex items-center"><XCircle className="h-4 w-4 mr-1" /> Wrong</span>
+                            )}
+                          </div>
+                          <p className="font-medium mb-3">{question.question}</p>
+                          <div className="space-y-2">
+                            {question.options.map((opt, i) => (
+                              <div 
+                                key={i} 
+                                className={`p-2 rounded text-sm ${
+                                  i === ans.correct 
+                                    ? 'bg-green-200 dark:bg-green-900 font-medium' 
+                                    : ans.selected === i && !isCorrect
+                                      ? 'bg-red-200 dark:bg-red-900'
+                                      : ''
+                                }`}
+                              >
+                                <span className="font-medium mr-2">{String.fromCharCode(65 + i)}.</span>
+                                {opt}
+                                {i === ans.correct && <Check className="h-4 w-4 inline ml-2 text-green-600" />}
+                                {ans.selected === i && !isCorrect && <X className="h-4 w-4 inline ml-2 text-red-600" />}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
                 </Card>
+              ) : (
+                /* Main Live Test View */
+                <>
+                  {/* Auto Daily Test Banner */}
+                  {isAutoTestActive && currentAutoTestConfig && (
+                    <Card className="border-2 border-green-500 bg-green-50 dark:bg-green-900/20">
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse" />
+                            <div>
+                              <h4 className="font-semibold text-green-700 dark:text-green-400">
+                                {currentAutoTestConfig.title}
+                              </h4>
+                              <p className="text-sm text-muted-foreground">
+                                {currentAutoTestConfig.questionCount} questions • {currentAutoTestConfig.duration} min
+                              </p>
+                            </div>
+                          </div>
+                          <Button 
+                            onClick={() => {
+                              // Generate questions from categories
+                              let availableQuestions = groupMCQList.filter(q => 
+                                currentAutoTestConfig.categoryIds.length === 0 || 
+                                currentAutoTestConfig.categoryIds.includes(q.categoryId || '')
+                              )
+                              const count = Math.min(currentAutoTestConfig.questionCount, availableQuestions.length)
+                              const shuffled = [...availableQuestions].sort(() => Math.random() - 0.5)
+                              const selectedQuestions = shuffled.slice(0, count)
+                              
+                              if (selectedQuestions.length === 0) {
+                                alert('No questions available')
+                                return
+                              }
+                              
+                              // Start the auto test
+                              setLiveTestQuestions(selectedQuestions)
+                              setRunningLiveTest({
+                                id: `auto-${Date.now()}`,
+                                groupId: activeGroupId!,
+                                title: currentAutoTestConfig.title,
+                                startTime: Date.now(),
+                                endTime: Date.now() + currentAutoTestConfig.duration * 60 * 1000,
+                                duration: currentAutoTestConfig.duration,
+                                questionMode: 'auto',
+                                categoryIds: currentAutoTestConfig.categoryIds,
+                                questionCount: currentAutoTestConfig.questionCount,
+                                questionIds: selectedQuestions.map(q => q.id),
+                                autoReleaseResult: currentAutoTestConfig.autoReleaseResult,
+                                showSolution: currentAutoTestConfig.showSolution,
+                                showLeaderboard: currentAutoTestConfig.showLeaderboard,
+                                status: 'active',
+                                createdBy: 'auto',
+                                createdByName: 'Auto Test',
+                                createdAt: Date.now()
+                              })
+                              setLiveTestStartedAt(Date.now())
+                              setLiveTestCurrentQ(0)
+                              setLiveTestAnswers({})
+                            }}
+                            className="bg-green-600 hover:bg-green-700"
+                          >
+                            <Play className="h-4 w-4 mr-2" />
+                            Start Daily Test
+                          </Button>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-2">
+                          Available until {currentAutoTestConfig.endTime} today
+                        </p>
+                      </CardContent>
+                    </Card>
+                  )}
+                  
+                  {/* Sub-tabs */}
+                  <div className="flex gap-2 border-b pb-2 mb-4">
+                    <Button 
+                      variant={liveTestTab === 'upcoming' ? 'default' : 'ghost'} 
+                      size="sm"
+                      onClick={() => setLiveTestTab('upcoming')}
+                    >
+                      <Clock className="h-4 w-4 mr-1" /> Upcoming
+                    </Button>
+                    {activeLiveTest && (
+                      <Button 
+                        variant={liveTestTab === 'active' ? 'default' : 'ghost'} 
+                        size="sm"
+                        onClick={() => setLiveTestTab('active')}
+                        className="bg-green-500 hover:bg-green-600 text-white"
+                      >
+                        <Play className="h-4 w-4 mr-1" /> Active Now!
+                      </Button>
+                    )}
+                    <Button 
+                      variant={liveTestTab === 'past' ? 'default' : 'ghost'} 
+                      size="sm"
+                      onClick={() => setLiveTestTab('past')}
+                    >
+                      <History className="h-4 w-4 mr-1" /> Past Tests
+                    </Button>
+                    <Button 
+                      variant={liveTestTab === 'results' ? 'default' : 'ghost'} 
+                      size="sm"
+                      onClick={() => setLiveTestTab('results')}
+                    >
+                      <Trophy className="h-4 w-4 mr-1" /> My Results
+                    </Button>
+                  </div>
+                  
+                  {/* Upcoming Tests */}
+                  {liveTestTab === 'upcoming' && (
+                    <div className="space-y-4">
+                      {upcomingLiveTests.length === 0 ? (
+                        <Card className="p-8 text-center">
+                          <Clock className="h-16 w-16 mx-auto text-muted-foreground mb-4" />
+                          <h3 className="text-lg font-semibold mb-2">No Upcoming Tests</h3>
+                          <p className="text-muted-foreground">Check back later for scheduled tests</p>
+                        </Card>
+                      ) : (
+                        upcomingLiveTests.map(test => (
+                          <Card key={test.id} className="p-4">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <h3 className="font-semibold">{test.title}</h3>
+                                <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
+                                  <span><Calendar className="h-4 w-4 inline mr-1" /> {new Date(test.startTime).toLocaleDateString()}</span>
+                                  <span><Clock className="h-4 w-4 inline mr-1" /> {new Date(test.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                  <span><Target className="h-4 w-4 inline mr-1" /> {test.questionIds.length} questions</span>
+                                  <span><Clock className="h-4 w-4 inline mr-1" /> {test.duration} min</span>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <div className="text-lg font-bold text-primary">{formatCountdown(test.startTime)}</div>
+                                <p className="text-xs text-muted-foreground">until start</p>
+                              </div>
+                            </div>
+                          </Card>
+                        ))
+                      )}
+                    </div>
+                  )}
+                  
+                  {/* Active Test */}
+                  {liveTestTab === 'active' && activeLiveTest && (
+                    <Card className="p-6 border-2 border-green-500">
+                      <div className="flex items-center gap-2 text-green-600 mb-4">
+                        <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse" />
+                        <span className="font-semibold">LIVE NOW</span>
+                      </div>
+                      <h3 className="text-xl font-bold mb-2">{activeLiveTest.title}</h3>
+                      
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                        <div className="text-center p-3 bg-muted rounded">
+                          <div className="text-2xl font-bold">{activeLiveTest.questionIds.length}</div>
+                          <p className="text-xs text-muted-foreground">Questions</p>
+                        </div>
+                        <div className="text-center p-3 bg-muted rounded">
+                          <div className="text-2xl font-bold">{activeLiveTest.duration}</div>
+                          <p className="text-xs text-muted-foreground">Minutes</p>
+                        </div>
+                        <div className="text-center p-3 bg-muted rounded">
+                          <div className="text-2xl font-bold text-red-500">{formatCountdown(activeLiveTest.endTime)}</div>
+                          <p className="text-xs text-muted-foreground">Remaining</p>
+                        </div>
+                        <div className="text-center p-3 bg-muted rounded">
+                          <div className="text-2xl font-bold">{getLiveTestResultsByTest(activeLiveTest.id).filter(r => r.status === 'submitted').length}</div>
+                          <p className="text-xs text-muted-foreground">Submitted</p>
+                        </div>
+                      </div>
+                      
+                      {(() => {
+                        const myResult = getMyResult(activeLiveTest.id)
+                        if (myResult?.status === 'submitted') {
+                          return (
+                            <div className="text-center p-4 bg-green-100 dark:bg-green-900/30 rounded">
+                              <CheckCircle2 className="h-8 w-8 mx-auto text-green-600 mb-2" />
+                              <p className="font-medium">You have submitted this test</p>
+                              <p className="text-sm text-muted-foreground">Result will be available after test ends</p>
+                            </div>
+                          )
+                        }
+                        return (
+                          <Button size="lg" className="w-full" onClick={() => startLiveTest(activeLiveTest)}>
+                            <Play className="h-5 w-5 mr-2" /> 
+                            {myResult?.status === 'in-progress' ? 'Continue Test' : 'Start Test'}
+                          </Button>
+                        )
+                      })()}
+                    </Card>
+                  )}
+                  
+                  {/* Past Tests */}
+                  {liveTestTab === 'past' && (
+                    <div className="space-y-4">
+                      {pastLiveTests.length === 0 ? (
+                        <Card className="p-8 text-center">
+                          <History className="h-16 w-16 mx-auto text-muted-foreground mb-4" />
+                          <h3 className="text-lg font-semibold mb-2">No Past Tests</h3>
+                          <p className="text-muted-foreground">Completed tests will appear here</p>
+                        </Card>
+                      ) : (
+                        pastLiveTests.map(test => {
+                          const myResult = getMyResult(test.id)
+                          const leaderboard = getLiveTestLeaderboard(test.id)
+                          const canView = canViewResult(test)
+                          
+                          return (
+                            <Card key={test.id} className="p-4">
+                              <div className="flex items-start justify-between">
+                                <div>
+                                  <h3 className="font-semibold">{test.title}</h3>
+                                  <p className="text-sm text-muted-foreground">
+                                    {new Date(test.endTime).toLocaleDateString()} • {test.questionIds.length} questions
+                                  </p>
+                                </div>
+                                <div className="text-right">
+                                  {myResult && canView ? (
+                                    <div className={`text-2xl font-bold ${myResult.score >= 80 ? 'text-green-500' : myResult.score >= 50 ? 'text-yellow-500' : 'text-red-500'}`}>
+                                      {myResult.score}%
+                                    </div>
+                                  ) : myResult ? (
+                                    <span className="text-sm text-muted-foreground">Result pending</span>
+                                  ) : (
+                                    <span className="text-sm text-muted-foreground">Not attempted</span>
+                                  )}
+                                </div>
+                              </div>
+                              
+                              {canView && (
+                                <div className="flex gap-2 mt-3">
+                                  {myResult && test.showSolution && (
+                                    <Button 
+                                      size="sm" 
+                                      variant="outline"
+                                      onClick={() => {
+                                        setViewingLiveTestResult(myResult)
+                                        setViewingLiveTestSolutions(true)
+                                      }}
+                                    >
+                                      <Eye className="h-4 w-4 mr-1" /> View Solutions
+                                    </Button>
+                                  )}
+                                  {test.showLeaderboard && leaderboard.length > 0 && (
+                                    <Button 
+                                      size="sm" 
+                                      variant="outline"
+                                      onClick={() => {
+                                        setSelectedLiveTest(test)
+                                        setLiveTestTab('results')
+                                      }}
+                                    >
+                                      <Trophy className="h-4 w-4 mr-1" /> Leaderboard
+                                    </Button>
+                                  )}
+                                </div>
+                              )}
+                            </Card>
+                          )
+                        })
+                      )}
+                    </div>
+                  )}
+                  
+                  {/* Results / Leaderboard */}
+                  {liveTestTab === 'results' && (
+                    <div className="space-y-4">
+                      {/* Selected Test Leaderboard */}
+                      {selectedLiveTest ? (
+                        <Card>
+                          <CardHeader>
+                            <div className="flex items-center justify-between">
+                              <CardTitle className="flex items-center gap-2">
+                                <Trophy className="h-5 w-5 text-yellow-500" />
+                                {selectedLiveTest.title} - Leaderboard
+                              </CardTitle>
+                              <Button variant="ghost" size="sm" onClick={() => setSelectedLiveTest(null)}>
+                                <X className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </CardHeader>
+                          <CardContent>
+                            {(() => {
+                              const leaderboard = getLiveTestLeaderboard(selectedLiveTest.id)
+                              if (leaderboard.length === 0) {
+                                return <p className="text-muted-foreground text-center py-4">No results yet</p>
+                              }
+                              return (
+                                <div className="space-y-2">
+                                  {leaderboard.map((result, idx) => (
+                                    <div 
+                                      key={result.id} 
+                                      className={`flex items-center justify-between p-3 rounded ${
+                                        idx === 0 ? 'bg-yellow-100 dark:bg-yellow-900/30 border border-yellow-300' :
+                                        idx === 1 ? 'bg-gray-100 dark:bg-gray-800/50 border border-gray-300' :
+                                        idx === 2 ? 'bg-orange-100 dark:bg-orange-900/30 border border-orange-300' :
+                                        'bg-muted/30'
+                                      }`}
+                                    >
+                                      <div className="flex items-center gap-3">
+                                        <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold ${
+                                          idx === 0 ? 'bg-yellow-500 text-white' :
+                                          idx === 1 ? 'bg-gray-400 text-white' :
+                                          idx === 2 ? 'bg-orange-500 text-white' :
+                                          'bg-muted text-muted-foreground'
+                                        }`}>
+                                          {idx + 1}
+                                        </div>
+                                        <div>
+                                          <p className="font-medium">
+                                            {result.userName}
+                                            {result.userId === user?.id && <span className="text-xs text-primary ml-1">(You)</span>}
+                                          </p>
+                                          <p className="text-xs text-muted-foreground">
+                                            {Math.floor(result.timeTaken / 60)}:{String(result.timeTaken % 60).padStart(2, '0')} • {result.correct}/{result.total} correct
+                                          </p>
+                                        </div>
+                                      </div>
+                                      <div className="text-xl font-bold">{result.score}%</div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )
+                            })()}
+                          </CardContent>
+                        </Card>
+                      ) : (
+                        /* My Results Summary */
+                        <Card>
+                          <CardHeader>
+                            <CardTitle>My Live Test Results</CardTitle>
+                          </CardHeader>
+                          <CardContent>
+                            {(() => {
+                              const myResults = liveTestResults.filter(r => r.userId === user?.id && r.status === 'submitted')
+                              if (myResults.length === 0) {
+                                return <p className="text-muted-foreground text-center py-4">No results yet. Take a live test!</p>
+                              }
+                              return (
+                                <div className="space-y-2">
+                                  {myResults.sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0)).map(result => {
+                                    const test = liveTests.find(t => t.id === result.liveTestId)
+                                    if (!test) return null
+                                    const canView = canViewResult(test)
+                                    
+                                    return (
+                                      <div key={result.id} className="flex items-center justify-between p-3 border rounded">
+                                        <div>
+                                          <p className="font-medium">{test.title}</p>
+                                          <p className="text-xs text-muted-foreground">
+                                            {result.submittedAt ? new Date(result.submittedAt).toLocaleDateString() : ''} • {result.correct}/{result.total} correct
+                                          </p>
+                                        </div>
+                                        <div className="flex items-center gap-3">
+                                          {canView ? (
+                                            <>
+                                              <div className={`text-xl font-bold ${result.score >= 80 ? 'text-green-500' : result.score >= 50 ? 'text-yellow-500' : 'text-red-500'}`}>
+                                                {result.score}%
+                                              </div>
+                                              {test.showSolution && (
+                                                <Button 
+                                                  size="sm" 
+                                                  variant="outline"
+                                                  onClick={() => {
+                                                    setViewingLiveTestResult(result)
+                                                    setViewingLiveTestSolutions(true)
+                                                  }}
+                                                >
+                                                  <Eye className="h-4 w-4" />
+                                                </Button>
+                                              )}
+                                            </>
+                                          ) : (
+                                            <span className="text-sm text-muted-foreground">Result pending</span>
+                                          )}
+                                        </div>
+                                      </div>
+                                    )
+                                  })}
+                                </div>
+                              )
+                            })()}
+                          </CardContent>
+                        </Card>
+                      )}
+                    </div>
+                  )}
+                </>
               )}
             </TabsContent>
 
-            {/* Members Tab */}
-            <TabsContent value="members">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex justify-between">
-                    <span>Members ({activeGroup?.members.length})</span>
-                    <Button variant="outline" size="sm" onClick={copyGroupCode}>
-                      <Copy className="h-4 w-4 mr-1" /> Invite
+            {/* Settings Tab */}
+            <TabsContent value="settings" className="space-y-4">
+              {/* Page Title */}
+              <div className="flex items-center gap-2 mb-2">
+                <Settings className="h-5 w-5 text-primary" />
+                <h2 className="text-lg font-semibold">Group Settings</h2>
+              </div>
+
+              {/* Members Section - Everyone can see */}
+              <Card className="border-2">
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <Users className="h-5 w-5 text-blue-500" />
+                      Members
+                      <span className="bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs px-2 py-0.5 rounded-full">
+                        {activeGroup?.members.length}
+                      </span>
+                    </CardTitle>
+                    <Button variant="outline" size="sm" onClick={copyGroupCode} className="h-8">
+                      <Copy className="h-3.5 w-3.5 mr-1.5" /> Invite Code
                     </Button>
-                  </CardTitle>
+                  </div>
                 </CardHeader>
-                <CardContent className="space-y-3">
-                  {activeGroup?.members.map(member => (
-                    <div key={member.userId} className="flex items-center justify-between p-3 bg-muted/50 rounded">
-                      <div className="flex items-center gap-3">
-                        <Avatar><AvatarFallback>{member.name.charAt(0)}</AvatarFallback></Avatar>
-                        <div>
-                          <p className="font-medium">{member.name}</p>
-                          <p className="text-xs text-muted-foreground capitalize">{member.role}</p>
+                <CardContent className="pt-0">
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {activeGroup?.members.map(member => (
+                      <div key={member.userId} className="flex items-center justify-between p-2.5 bg-muted/50 rounded-lg">
+                        <div className="flex items-center gap-2.5">
+                          <Avatar className="h-8 w-8">
+                            <AvatarFallback className="text-sm">{member.name.charAt(0)}</AvatarFallback>
+                          </Avatar>
+                          <div>
+                            <p className="font-medium text-sm leading-tight">{member.name}</p>
+                            <p className="text-[10px] text-muted-foreground capitalize">{member.role}</p>
+                          </div>
                         </div>
+                        {member.role === 'admin' && <Crown className="h-4 w-4 text-yellow-500" />}
                       </div>
-                      {member.role === 'admin' && <Crown className="h-4 w-4 text-yellow-500" />}
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </CardContent>
               </Card>
-            </TabsContent>
 
-            {/* Settings Tab */}
-            {isAdmin && (
-              <TabsContent value="settings">
-                <Card>
-                  <CardHeader><CardTitle>Group Settings</CardTitle></CardHeader>
-                  <CardContent className="space-y-4">
-                    <div>
-                      <label className="text-sm font-medium">Group Name</label>
-                      <Input 
-                        value={activeGroup?.name || ''} 
-                        onChange={e => activeGroup && updateGroup({ ...activeGroup, name: e.target.value })}
-                      />
+              {/* Admin Only Settings */}
+              {isAdmin && (
+                <>
+                {/* Live Test Management */}
+                <Card className="border-2 border-green-200 dark:border-green-800">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <Brain className="h-5 w-5 text-green-500" />
+                      Live Test Management
+                    </CardTitle>
+                    <p className="text-xs text-muted-foreground">
+                      Schedule and manage live tests
+                    </p>
+                  </CardHeader>
+                  <CardContent className="pt-0 space-y-4">
+                    {/* Tab Buttons */}
+                    <div className="flex gap-2">
+                      <Button 
+                        variant={liveTestMgmtTab === 'schedule' ? 'default' : 'outline'}
+                        size="sm"
+                        onClick={() => setLiveTestMgmtTab('schedule')}
+                        className="flex-1 sm:flex-none"
+                      >
+                        <Calendar className="h-4 w-4 mr-1.5" />
+                        Schedule
+                      </Button>
+                      <Button 
+                        variant={liveTestMgmtTab === 'auto' ? 'default' : 'outline'}
+                        size="sm"
+                        onClick={() => setLiveTestMgmtTab('auto')}
+                        className="flex-1 sm:flex-none"
+                      >
+                        <RefreshCw className="h-4 w-4 mr-1.5" />
+                        Auto Daily
+                        {autoTestEnabled && <span className="ml-1.5 w-2 h-2 bg-green-500 rounded-full" />}
+                      </Button>
                     </div>
-                    <div>
-                      <label className="text-sm font-medium">Description</label>
+                    
+                    {/* Schedule Tab */}
+                    {liveTestMgmtTab === 'schedule' && (
+                      <>
+                    {/* Create New Live Test Button */}
+                    {!showCreateLiveTest ? (
+                      <Button onClick={() => setShowCreateLiveTest(true)} className="w-full">
+                        <Plus className="h-4 w-4 mr-2" /> Schedule New Live Test
+                      </Button>
+                    ) : (
+                      /* Create Live Test Form */
+                      <div className="p-4 border rounded-lg bg-muted/30 space-y-4">
+                        <div className="flex justify-between items-center">
+                          <h4 className="font-semibold">Schedule New Live Test</h4>
+                          <Button variant="ghost" size="sm" onClick={() => setShowCreateLiveTest(false)}>
+                            <X className="h-4 w-4" />
+                          </Button>
+                        </div>
+                        
+                        <div>
+                          <label className="text-sm font-medium">Test Title *</label>
+                          <Input 
+                            placeholder="e.g., Weekly Quiz #1"
+                            value={newLiveTestTitle}
+                            onChange={e => setNewLiveTestTitle(e.target.value)}
+                          />
+                        </div>
+                        
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="text-sm font-medium">Start Date *</label>
+                            <Input 
+                              type="date"
+                              value={newLiveTestStartDate}
+                              onChange={e => setNewLiveTestStartDate(e.target.value)}
+                            />
+                          </div>
+                          <div>
+                            <label className="text-sm font-medium">Start Time *</label>
+                            <Input 
+                              type="time"
+                              value={newLiveTestStartTime}
+                              onChange={e => setNewLiveTestStartTime(e.target.value)}
+                            />
+                          </div>
+                        </div>
+                        
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="text-sm font-medium">End Date *</label>
+                            <Input 
+                              type="date"
+                              value={newLiveTestEndDate}
+                              onChange={e => setNewLiveTestEndDate(e.target.value)}
+                            />
+                          </div>
+                          <div>
+                            <label className="text-sm font-medium">End Time *</label>
+                            <Input 
+                              type="time"
+                              value={newLiveTestEndTime}
+                              onChange={e => setNewLiveTestEndTime(e.target.value)}
+                            />
+                          </div>
+                        </div>
+                        
+                        <div>
+                          <label className="text-sm font-medium">Test Duration (minutes)</label>
+                          <Select value={newLiveTestDuration} onValueChange={setNewLiveTestDuration}>
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="15">15 minutes</SelectItem>
+                              <SelectItem value="30">30 minutes</SelectItem>
+                              <SelectItem value="45">45 minutes</SelectItem>
+                              <SelectItem value="60">60 minutes</SelectItem>
+                              <SelectItem value="90">90 minutes</SelectItem>
+                              <SelectItem value="120">120 minutes</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <p className="text-xs text-muted-foreground mt-1">Time allowed after starting the test</p>
+                        </div>
+                        
+                        <div>
+                          <label className="text-sm font-medium">Question Selection</label>
+                          <Select value={newLiveTestMode} onValueChange={(v) => setNewLiveTestMode(v as 'auto' | 'manual')}>
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="auto">Auto - Random from Question Bank</SelectItem>
+                              <SelectItem value="manual">Manual - Select specific questions</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        
+                        {newLiveTestMode === 'auto' && (
+                          <>
+                            <div>
+                              <label className="text-sm font-medium mb-2 block">Select Categories</label>
+                              <div className="border rounded-lg p-3 max-h-48 overflow-y-auto space-y-2">
+                                {/* All Categories Option */}
+                                <label className="flex items-center gap-2 p-2 hover:bg-muted rounded cursor-pointer">
+                                  <input
+                                    type="checkbox"
+                                    checked={newLiveTestCategories.length === 0}
+                                    onChange={(e) => {
+                                      if (e.target.checked) {
+                                        setNewLiveTestCategories([])
+                                      }
+                                    }}
+                                    className="h-4 w-4"
+                                  />
+                                  <span className="text-sm font-medium">All Categories ({groupMCQList.length})</span>
+                                </label>
+                                {/* Individual Categories */}
+                                {groupCategories.map(cat => {
+                                  const count = groupMCQList.filter(q => q.categoryId === cat.id).length
+                                  const isChecked = newLiveTestCategories.includes(cat.id)
+                                  return (
+                                    <label key={cat.id} className="flex items-center gap-2 p-2 hover:bg-muted rounded cursor-pointer">
+                                      <input
+                                        type="checkbox"
+                                        checked={isChecked}
+                                        onChange={(e) => {
+                                          if (e.target.checked) {
+                                            setNewLiveTestCategories([...newLiveTestCategories, cat.id])
+                                          } else {
+                                            setNewLiveTestCategories(newLiveTestCategories.filter(id => id !== cat.id))
+                                          }
+                                        }}
+                                        className="h-4 w-4"
+                                      />
+                                      <span className="text-sm">{cat.name} ({count})</span>
+                                    </label>
+                                  )
+                                })}
+                              </div>
+                              <p className="text-xs text-muted-foreground mt-1">
+                                {newLiveTestCategories.length === 0 
+                                  ? `All ${groupMCQList.length} questions will be used`
+                                  : `${groupMCQList.filter(q => newLiveTestCategories.includes(q.categoryId || '')).length} questions from ${newLiveTestCategories.length} selected categories`
+                                }
+                              </p>
+                            </div>
+                            <div>
+                              <label className="text-sm font-medium">Number of Questions</label>
+                              <Select value={newLiveTestQuestionCount} onValueChange={setNewLiveTestQuestionCount}>
+                                <SelectTrigger>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="10">10 Questions</SelectItem>
+                                  <SelectItem value="20">20 Questions</SelectItem>
+                                  <SelectItem value="30">30 Questions</SelectItem>
+                                  <SelectItem value="50">50 Questions</SelectItem>
+                                  <SelectItem value="100">100 Questions</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          </>
+                        )}
+                        
+                        <div className="space-y-3 pt-3 border-t">
+                          <label className="text-sm font-medium">Result Settings</label>
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm">Auto-release result after test ends</span>
+                            <input 
+                              type="checkbox" 
+                              checked={newLiveTestAutoRelease}
+                              onChange={e => setNewLiveTestAutoRelease(e.target.checked)}
+                              className="h-4 w-4"
+                            />
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm">Show solutions after result</span>
+                            <input 
+                              type="checkbox" 
+                              checked={newLiveTestShowSolution}
+                              onChange={e => setNewLiveTestShowSolution(e.target.checked)}
+                              className="h-4 w-4"
+                            />
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm">Show leaderboard</span>
+                            <input 
+                              type="checkbox" 
+                              checked={newLiveTestShowLeaderboard}
+                              onChange={e => setNewLiveTestShowLeaderboard(e.target.checked)}
+                              className="h-4 w-4"
+                            />
+                          </div>
+                        </div>
+                        
+                        <Button onClick={handleCreateLiveTest} className="w-full">
+                          <Plus className="h-4 w-4 mr-2" /> Create Live Test
+                        </Button>
+                      </div>
+                    )}
+                    
+                    {/* Scheduled Tests List */}
+                    {getLiveTestsByGroup(activeGroupId || '').length > 0 && (
+                      <div className="space-y-3">
+                        <h4 className="font-medium text-sm">Scheduled Tests</h4>
+                        {getLiveTestsByGroup(activeGroupId || '').map(test => (
+                          <div key={test.id} className="p-3 border rounded flex items-center justify-between">
+                            <div>
+                              <p className="font-medium">{test.title}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {new Date(test.startTime).toLocaleString()} - {new Date(test.endTime).toLocaleString()}
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                {test.questionIds.length} questions • {test.duration} min
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className={`text-xs px-2 py-1 rounded ${
+                                Date.now() < test.startTime ? 'bg-blue-100 text-blue-700' :
+                                Date.now() < test.endTime ? 'bg-green-100 text-green-700' :
+                                'bg-gray-100 text-gray-700'
+                              }`}>
+                                {Date.now() < test.startTime ? 'Scheduled' :
+                                 Date.now() < test.endTime ? 'Active' : 'Ended'}
+                              </span>
+                              <Button 
+                                variant="ghost" 
+                                size="sm"
+                                onClick={() => {
+                                  if (confirm('Delete this test?')) {
+                                    removeLiveTest(test.id)
+                                  }
+                                }}
+                              >
+                                <Trash2 className="h-4 w-4 text-red-500" />
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                      </>
+                    )}
+                    
+                    {/* Auto Daily Test Tab */}
+                    {liveTestMgmtTab === 'auto' && (
+                      <div className="space-y-4">
+                        {/* Enable Toggle */}
+                        <div className="flex items-center justify-between p-4 border rounded-lg bg-muted/30">
+                          <div>
+                            <h4 className="font-medium">Enable Auto Daily Test</h4>
+                            <p className="text-sm text-muted-foreground">
+                              Automatically run a test every day at the specified time
+                            </p>
+                          </div>
+                          <input
+                            type="checkbox"
+                            checked={autoTestEnabled}
+                            onChange={e => setAutoTestEnabled(e.target.checked)}
+                            className="h-5 w-5"
+                          />
+                        </div>
+                        
+                        {/* Config Form */}
+                        <div className={`space-y-4 ${!autoTestEnabled ? 'opacity-50 pointer-events-none' : ''}`}>
+                          <div>
+                            <label className="text-sm font-medium">Test Title</label>
+                            <Input
+                              value={autoTestTitle}
+                              onChange={e => setAutoTestTitle(e.target.value)}
+                              placeholder="Daily Practice Test"
+                            />
+                          </div>
+                          
+                          <div>
+                            <label className="text-sm font-medium mb-2 block">Select Categories</label>
+                            <div className="border rounded-lg p-3 max-h-40 overflow-y-auto space-y-2">
+                              {groupCategories.length === 0 ? (
+                                <p className="text-sm text-muted-foreground">No categories available. Add categories first.</p>
+                              ) : (
+                                groupCategories.map(cat => {
+                                  const count = groupMCQList.filter(q => q.categoryId === cat.id).length
+                                  const isChecked = autoTestCategories.includes(cat.id)
+                                  return (
+                                    <label key={cat.id} className="flex items-center gap-2 p-2 hover:bg-muted rounded cursor-pointer">
+                                      <input
+                                        type="checkbox"
+                                        checked={isChecked}
+                                        onChange={e => {
+                                          if (e.target.checked) {
+                                            setAutoTestCategories([...autoTestCategories, cat.id])
+                                          } else {
+                                            setAutoTestCategories(autoTestCategories.filter(id => id !== cat.id))
+                                          }
+                                        }}
+                                        className="h-4 w-4"
+                                      />
+                                      <span className="text-sm">{cat.name} ({count})</span>
+                                    </label>
+                                  )
+                                })
+                              )}
+                            </div>
+                          </div>
+                          
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <label className="text-sm font-medium">Daily Start Time</label>
+                              <Input
+                                type="time"
+                                value={autoTestStartTime}
+                                onChange={e => setAutoTestStartTime(e.target.value)}
+                              />
+                            </div>
+                            <div>
+                              <label className="text-sm font-medium">Daily End Time</label>
+                              <Input
+                                type="time"
+                                value={autoTestEndTime}
+                                onChange={e => setAutoTestEndTime(e.target.value)}
+                              />
+                            </div>
+                          </div>
+                          
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <label className="text-sm font-medium">Test Duration</label>
+                              <Select value={autoTestDuration} onValueChange={setAutoTestDuration}>
+                                <SelectTrigger>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="15">15 minutes</SelectItem>
+                                  <SelectItem value="30">30 minutes</SelectItem>
+                                  <SelectItem value="45">45 minutes</SelectItem>
+                                  <SelectItem value="60">60 minutes</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <div>
+                              <label className="text-sm font-medium">Questions Count</label>
+                              <Select value={autoTestQuestionCount} onValueChange={setAutoTestQuestionCount}>
+                                <SelectTrigger>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="10">10 Questions</SelectItem>
+                                  <SelectItem value="20">20 Questions</SelectItem>
+                                  <SelectItem value="30">30 Questions</SelectItem>
+                                  <SelectItem value="50">50 Questions</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          </div>
+                          
+                          <div>
+                            <label className="text-sm font-medium mb-2 block">Active Days</label>
+                            <div className="flex flex-wrap gap-2">
+                              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, idx) => (
+                                <button
+                                  key={day}
+                                  onClick={() => {
+                                    if (autoTestDays.includes(idx)) {
+                                      setAutoTestDays(autoTestDays.filter(d => d !== idx))
+                                    } else {
+                                      setAutoTestDays([...autoTestDays, idx])
+                                    }
+                                  }}
+                                  className={`px-3 py-1 rounded text-sm ${
+                                    autoTestDays.includes(idx)
+                                      ? 'bg-primary text-primary-foreground'
+                                      : 'bg-muted hover:bg-muted/80'
+                                  }`}
+                                >
+                                  {day}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          
+                          <div className="space-y-2 pt-3 border-t">
+                            <label className="text-sm font-medium">Result Settings</label>
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm">Auto-release result after test ends</span>
+                              <input
+                                type="checkbox"
+                                checked={autoTestAutoRelease}
+                                onChange={e => setAutoTestAutoRelease(e.target.checked)}
+                                className="h-4 w-4"
+                              />
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm">Show solutions after result</span>
+                              <input
+                                type="checkbox"
+                                checked={autoTestShowSolution}
+                                onChange={e => setAutoTestShowSolution(e.target.checked)}
+                                className="h-4 w-4"
+                              />
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm">Show leaderboard</span>
+                              <input
+                                type="checkbox"
+                                checked={autoTestShowLeaderboard}
+                                onChange={e => setAutoTestShowLeaderboard(e.target.checked)}
+                                className="h-4 w-4"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                        
+                        <Button onClick={handleSaveAutoTestConfig} className="w-full">
+                          <Check className="h-4 w-4 mr-2" />
+                          Save Auto Test Settings
+                        </Button>
+                        
+                        {autoTestEnabled && currentAutoTestConfig && (
+                          <div className="p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
+                            <p className="text-sm font-medium text-green-700 dark:text-green-400">
+                              ✓ Auto Test Active
+                            </p>
+                            <p className="text-xs text-muted-foreground mt-1">
+                              Runs daily from {currentAutoTestConfig.startTime} to {currentAutoTestConfig.endTime}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* Question Bank */}
+                <Card className="border-2 border-purple-200 dark:border-purple-800">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <Brain className="h-5 w-5 text-purple-500" />
+                      Question Bank
+                      <span className="bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 text-xs px-2 py-0.5 rounded-full">
+                        {groupMCQList.length} questions
+                      </span>
+                    </CardTitle>
+                    <p className="text-xs text-muted-foreground">
+                      {groupCategories.length} categories
+                    </p>
+                  </CardHeader>
+                  <CardContent className="pt-0 space-y-4">
+                    {/* Add Category */}
+                    <div className="flex gap-2">
                       <Input 
-                        value={activeGroup?.description || ''} 
-                        onChange={e => activeGroup && updateGroup({ ...activeGroup, description: e.target.value })}
+                        placeholder="New category name..." 
+                        value={newCategoryName} 
+                        onChange={e => setNewCategoryName(e.target.value)}
+                        onKeyDown={e => e.key === 'Enter' && handleAddCategory()}
+                        className="flex-1"
                       />
+                      <Button onClick={handleAddCategory} size="sm">
+                        <Plus className="h-4 w-4 mr-1" /> Add
+                      </Button>
                     </div>
-                    <div className="pt-4 border-t">
+
+                    {/* Question Upload Tabs */}
+                    <div className="flex gap-1 p-1 bg-muted rounded-lg">
+                      <button
+                        onClick={() => setQuestionBankTab('single')}
+                        className={`flex-1 px-2 py-1.5 rounded text-xs font-medium transition-colors ${
+                          questionBankTab === 'single'
+                            ? 'bg-background shadow text-foreground'
+                            : 'text-muted-foreground hover:text-foreground'
+                        }`}
+                      >
+                        ✏️ Single
+                      </button>
+                      <button
+                        onClick={() => setQuestionBankTab('group')}
+                        className={`flex-1 px-2 py-1.5 rounded text-xs font-medium transition-colors ${
+                          questionBankTab === 'group'
+                            ? 'bg-background shadow text-foreground'
+                            : 'text-muted-foreground hover:text-foreground'
+                        }`}
+                      >
+                        📋 Group
+                      </button>
+                      <button
+                        onClick={() => setQuestionBankTab('instant')}
+                        className={`flex-1 px-2 py-1.5 rounded text-xs font-medium transition-colors ${
+                          questionBankTab === 'instant'
+                            ? 'bg-background shadow text-foreground'
+                            : 'text-muted-foreground hover:text-foreground'
+                        }`}
+                      >
+                        ⚡ Instant
+                      </button>
+                    </div>
+
+                    {/* Single Upload Tab */}
+                    {questionBankTab === 'single' && groupCategories.length > 0 && (
+                      <div className="p-3 border rounded-lg bg-muted/30 space-y-3">
+                        <p className="text-sm font-medium">Add Single Question (MCQ)</p>
+                        <Textarea 
+                          placeholder="Enter your question here..." 
+                          value={qbQuestion} 
+                          onChange={e => setQbQuestion(e.target.value)} 
+                          rows={2} 
+                          className="text-sm"
+                        />
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {[0, 1, 2, 3].map(i => (
+                            <div key={i} className="flex items-center gap-1.5">
+                              <input 
+                                type="radio" 
+                                name="qbCorrect" 
+                                checked={qbCorrect === i} 
+                                onChange={() => setQbCorrect(i)} 
+                                className="w-3.5 h-3.5" 
+                              />
+                              <span className={`font-medium text-sm w-5 ${qbCorrect === i ? 'text-green-600' : ''}`}>
+                                {i + 1}.
+                              </span>
+                              <Input 
+                                placeholder={`Option ${i + 1}`} 
+                                value={qbOptions[i]} 
+                                onChange={e => {
+                                  const newOpts = [...qbOptions]
+                                  newOpts[i] = e.target.value
+                                  setQbOptions(newOpts)
+                                }}
+                                className="flex-1 h-8 text-sm"
+                              />
+                            </div>
+                          ))}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Select value={qbCategoryId} onValueChange={setQbCategoryId}>
+                            <SelectTrigger className="w-40 h-8 text-sm">
+                              <SelectValue placeholder="Category" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {groupCategories.map(c => (
+                                <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <Button onClick={handleAddQuestion} size="sm">
+                            <Plus className="h-4 w-4 mr-1" /> Add Question
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Group Upload Tab */}
+                    {questionBankTab === 'group' && (
+                      <div className="p-3 border rounded-lg bg-blue-50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-800 space-y-4">
+                        <div className="text-center">
+                          <p className="text-sm font-medium text-blue-700 dark:text-blue-300">📋 Bulk Upload Questions</p>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Upload Excel (.xlsx) or Word (.docx) file
+                          </p>
+                        </div>
+                        
+                        {/* File Format Info */}
+                        <div className="text-xs bg-white dark:bg-gray-900 p-3 rounded border space-y-2">
+                          <p className="font-medium">📄 Excel Format (6 columns):</p>
+                          <p className="text-muted-foreground pl-2">Question | Option 1 | Option 2 | Option 3 | Option 4 | Correct (1/2/3/4)</p>
+                          <p className="font-medium mt-2">� Word Format:</p>
+                          <div className="text-muted-foreground pl-2 whitespace-pre-line">
+{`1. Question text here
+1) Option 1
+2) Option 2
+3) Option 3
+4) Option 4
+Ans: 1`}
+                          </div>
+                        </div>
+                        
+                        {/* File Upload */}
+                        <div className="flex flex-col gap-2">
+                          <input
+                            type="file"
+                            accept=".xlsx,.xls,.docx"
+                            onChange={handleGroupUploadFile}
+                            className="text-xs file:mr-2 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:bg-blue-500 file:text-white hover:file:bg-blue-600"
+                          />
+                          {groupUploadFile && (
+                            <p className="text-xs text-muted-foreground">
+                              Selected: {groupUploadFile.name}
+                            </p>
+                          )}
+                        </div>
+                        
+                        {/* Loading */}
+                        {groupUploadLoading && (
+                          <div className="text-center py-4">
+                            <RefreshCw className="h-5 w-5 animate-spin mx-auto text-blue-500" />
+                            <p className="text-xs text-muted-foreground mt-2">Parsing file...</p>
+                          </div>
+                        )}
+                        
+                        {/* Error */}
+                        {groupUploadError && (
+                          <div className="p-2 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 rounded text-xs">
+                            ❌ {groupUploadError}
+                          </div>
+                        )}
+                        
+                        {/* Parsed Questions Preview */}
+                        {groupUploadParsedQuestions.length > 0 && (
+                          <div className="space-y-3">
+                            <div className="flex items-center justify-between">
+                              <p className="text-sm font-medium text-green-700 dark:text-green-400">
+                                ✅ {groupUploadParsedQuestions.length} questions parsed
+                              </p>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                  setGroupUploadFile(null)
+                                  setGroupUploadParsedQuestions([])
+                                }}
+                                className="h-6 text-xs"
+                              >
+                                Clear
+                              </Button>
+                            </div>
+                            
+                            {/* Preview list */}
+                            <div className="max-h-40 overflow-y-auto space-y-2 border rounded p-2 bg-white dark:bg-gray-900">
+                              {groupUploadParsedQuestions.slice(0, 5).map((q, idx) => (
+                                <div key={idx} className="text-xs border-b pb-2 last:border-0">
+                                  <p className="font-medium truncate">{idx + 1}. {q.question}</p>
+                                  <div className="flex flex-wrap gap-1 mt-1">
+                                    {q.options.map((opt, i) => (
+                                      <span 
+                                        key={i} 
+                                        className={`px-1.5 py-0.5 rounded ${i === q.correctIndex ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}
+                                      >
+                                        {i + 1}. {opt.slice(0, 15)}{opt.length > 15 ? '...' : ''}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              ))}
+                              {groupUploadParsedQuestions.length > 5 && (
+                                <p className="text-xs text-muted-foreground text-center">
+                                  +{groupUploadParsedQuestions.length - 5} more questions...
+                                </p>
+                              )}
+                            </div>
+                            
+                            {/* Category Selection & Save */}
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Select value={groupUploadCategory} onValueChange={setGroupUploadCategory}>
+                                <SelectTrigger className="w-40 h-8 text-xs">
+                                  <SelectValue placeholder="Select Category" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {groupCategories.map(c => (
+                                    <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                              <Button 
+                                onClick={handleGroupUploadSave}
+                                disabled={!groupUploadCategory || groupUploadLoading}
+                                size="sm"
+                                className="bg-green-500 hover:bg-green-600"
+                              >
+                                <Upload className="h-4 w-4 mr-1" />
+                                Save All ({groupUploadParsedQuestions.length})
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                        
+                        {groupCategories.length === 0 && (
+                          <p className="text-xs text-amber-600 dark:text-amber-400 text-center">
+                            ⚠️ Add a category first before uploading
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Instant Download Tab - Content Library */}
+                    {questionBankTab === 'instant' && (
+                      <div className="space-y-4">
+                        {/* Library Header */}
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Download className="h-5 w-5 text-amber-500" />
+                            <span className="font-medium">Content Library</span>
+                          </div>
+                          <span className="text-xs text-muted-foreground">
+                            {libraryPacks.length} পacks available
+                          </span>
+                        </div>
+
+                        {/* Filters */}
+                        <div className="grid grid-cols-3 gap-2">
+                          {/* Subject Filter */}
+                          <select
+                            className="text-xs px-2 py-1.5 border rounded bg-background"
+                            value={librarySubjectId || ''}
+                            onChange={(e) => {
+                              setLibrarySubject(e.target.value || null)
+                              setLibraryTopic(null)
+                            }}
+                          >
+                            <option value="">All Subjects</option>
+                            {librarySubjects.map(s => (
+                              <option key={s.id} value={s.id}>{s.icon} {s.name}</option>
+                            ))}
+                          </select>
+
+                          {/* Topic Filter */}
+                          <select
+                            className="text-xs px-2 py-1.5 border rounded bg-background"
+                            value={libraryTopicId || ''}
+                            onChange={(e) => setLibraryTopic(e.target.value || null)}
+                            disabled={!librarySubjectId}
+                          >
+                            <option value="">All Topics</option>
+                            {librarySubjectId && getLibraryTopicsBySubject(librarySubjectId).map(t => (
+                              <option key={t.id} value={t.id}>{t.name}</option>
+                            ))}
+                          </select>
+
+                          {/* Price Filter */}
+                          <select
+                            className="text-xs px-2 py-1.5 border rounded bg-background"
+                            value={libraryFilterPricing}
+                            onChange={(e) => setLibraryFilterPricing(e.target.value as 'all' | 'free' | 'paid')}
+                          >
+                            <option value="all">All</option>
+                            <option value="free">🆓 Free Only</option>
+                            <option value="paid">💎 Paid Only</option>
+                          </select>
+                        </div>
+
+                        {/* Content Packs Grid */}
+                        <div className="grid gap-2 max-h-[350px] overflow-y-auto">
+                          {(() => {
+                            let filteredPacks = libraryPacks
+                            
+                            // Filter by subject
+                            if (librarySubjectId) {
+                              filteredPacks = getLibraryPacksBySubject(librarySubjectId)
+                            }
+                            
+                            // Filter by topic
+                            if (libraryTopicId) {
+                              filteredPacks = getLibraryPacksByTopic(libraryTopicId)
+                            }
+                            
+                            // Filter by pricing
+                            if (libraryFilterPricing !== 'all') {
+                              filteredPacks = filteredPacks.filter(p => p.pricing === libraryFilterPricing)
+                            }
+
+                            if (filteredPacks.length === 0) {
+                              return (
+                                <div className="text-center py-8 text-muted-foreground">
+                                  <Package className="h-10 w-10 mx-auto mb-2 opacity-50" />
+                                  <p className="text-sm">No content packs found</p>
+                                  <p className="text-xs mt-1">Try changing your filters</p>
+                                </div>
+                              )
+                            }
+
+                            return filteredPacks.map(pack => {
+                              const subject = librarySubjects.find(s => s.id === pack.subjectId)
+                              const topic = libraryTopics.find(t => t.id === pack.topicId)
+                              const downloaded = user ? hasLibraryDownloaded(pack.id, user.id) : false
+                              
+                              return (
+                                <div 
+                                  key={pack.id}
+                                  className={`p-3 border rounded-lg cursor-pointer transition-all hover:shadow-md ${
+                                    librarySelectedPack?.id === pack.id 
+                                      ? 'border-primary bg-primary/5' 
+                                      : 'hover:border-primary/50'
+                                  } ${downloaded ? 'opacity-60' : ''}`}
+                                  onClick={() => setLibrarySelectedPack(pack)}
+                                >
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div className="flex-1 min-w-0">
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-lg">{pack.contentType === 'mcq' ? '📝' : pack.contentType === 'notes' ? '📖' : '📦'}</span>
+                                        <div className="flex-1 min-w-0">
+                                          <p className="font-medium text-sm truncate">{pack.title}</p>
+                                          <p className="text-[10px] text-muted-foreground">
+                                            {subject?.icon} {subject?.name} • {topic?.name}
+                                          </p>
+                                        </div>
+                                      </div>
+                                      <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                                        {pack.description}
+                                      </p>
+                                      <div className="flex items-center gap-2 mt-2 text-[10px]">
+                                        {pack.mcqCount > 0 && (
+                                          <span className="bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-1.5 py-0.5 rounded">
+                                            {pack.mcqCount} MCQs
+                                          </span>
+                                        )}
+                                        {pack.notesCount > 0 && (
+                                          <span className="bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 px-1.5 py-0.5 rounded">
+                                            {pack.notesCount} Notes
+                                          </span>
+                                        )}
+                                        <span className="text-muted-foreground">
+                                          ⬇️ {pack.downloadCount}
+                                        </span>
+                                        {downloaded && (
+                                          <span className="text-green-600 font-medium">✓ Downloaded</span>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <div className="text-right flex-shrink-0">
+                                      {pack.pricing === 'free' ? (
+                                        <span className="text-xs font-bold text-green-600 bg-green-100 dark:bg-green-900/30 px-2 py-1 rounded">
+                                          FREE
+                                        </span>
+                                      ) : (
+                                        <span className="text-xs font-bold text-amber-600 bg-amber-100 dark:bg-amber-900/30 px-2 py-1 rounded">
+                                          ₹{pack.price}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              )
+                            })
+                          })()}
+                        </div>
+
+                        {/* Download Section - Shows when a pack is selected */}
+                        {librarySelectedPack && (
+                          <div className="p-4 border-2 border-primary rounded-lg bg-primary/5 space-y-3">
+                            <div className="flex items-start justify-between">
+                              <div>
+                                <p className="font-semibold">{librarySelectedPack.title}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {librarySelectedPack.mcqCount > 0 && `${librarySelectedPack.mcqCount} MCQs`}
+                                  {librarySelectedPack.mcqCount > 0 && librarySelectedPack.notesCount > 0 && ' • '}
+                                  {librarySelectedPack.notesCount > 0 && `${librarySelectedPack.notesCount} Notes`}
+                                </p>
+                              </div>
+                              <button 
+                                onClick={() => setLibrarySelectedPack(null)}
+                                className="text-muted-foreground hover:text-foreground"
+                              >
+                                <X className="h-4 w-4" />
+                              </button>
+                            </div>
+
+                            {/* Preview Content */}
+                            <div className="bg-background rounded-md p-2 max-h-[120px] overflow-y-auto">
+                              <p className="text-[10px] font-medium text-muted-foreground mb-1">Preview:</p>
+                              {librarySelectedPack.mcqCount > 0 && (
+                                <div className="space-y-1">
+                                  {getLibraryMcqsByPack(librarySelectedPack.id).slice(0, 3).map((mcq, idx) => (
+                                    <p key={mcq.id} className="text-xs truncate">
+                                      {idx + 1}. {mcq.question}
+                                    </p>
+                                  ))}
+                                  {librarySelectedPack.mcqCount > 3 && (
+                                    <p className="text-[10px] text-muted-foreground italic">
+                                      +{librarySelectedPack.mcqCount - 3} more questions...
+                                    </p>
+                                  )}
+                                </div>
+                              )}
+                              {librarySelectedPack.notesCount > 0 && (
+                                <div className="space-y-1 mt-2">
+                                  {getLibraryNotesByPack(librarySelectedPack.id).slice(0, 2).map((note) => (
+                                    <p key={note.id} className="text-xs truncate">
+                                      📄 {note.title}
+                                    </p>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Download Options - Only for MCQ packs */}
+                            {librarySelectedPack.mcqCount > 0 && (
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2">
+                                  <label className="text-xs font-medium flex-1">MCQs Download to:</label>
+                                  <select
+                                    className="text-xs px-2 py-1.5 border rounded bg-background flex-1"
+                                    value={libraryDownloadMode}
+                                    onChange={(e) => setLibraryDownloadMode(e.target.value as 'new' | 'merge')}
+                                  >
+                                    <option value="new">New Category</option>
+                                    <option value="merge">Existing Category</option>
+                                  </select>
+                                </div>
+
+                                {libraryDownloadMode === 'new' ? (
+                                  <Input
+                                    placeholder="New category name..."
+                                    value={libraryNewCategoryName}
+                                    onChange={(e) => setLibraryNewCategoryName(e.target.value)}
+                                    className="h-8 text-sm"
+                                  />
+                                ) : (
+                                  <select
+                                    className="w-full text-xs px-2 py-1.5 border rounded bg-background"
+                                    value={libraryDownloadCategory}
+                                    onChange={(e) => setLibraryDownloadCategory(e.target.value)}
+                                  >
+                                    <option value="">Select category...</option>
+                                    {groupCategories.map(c => (
+                                      <option key={c.id} value={c.id}>{c.name}</option>
+                                    ))}
+                                  </select>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Download Button */}
+                            <Button
+                              className="w-full"
+                              disabled={
+                                (user ? hasLibraryDownloaded(librarySelectedPack.id, user.id) : true) ||
+                                (librarySelectedPack.mcqCount > 0 && libraryDownloadMode === 'new' && !libraryNewCategoryName.trim()) ||
+                                (librarySelectedPack.mcqCount > 0 && libraryDownloadMode === 'merge' && !libraryDownloadCategory)
+                              }
+                              onClick={() => {
+                                if (!activeGroupId || !user) return
+
+                                // Download MCQs
+                                if (librarySelectedPack.mcqCount > 0) {
+                                  const mcqs = getLibraryMcqsByPack(librarySelectedPack.id)
+                                  
+                                  let targetCategoryId = libraryDownloadCategory
+                                  
+                                  // Create new category if needed
+                                  if (libraryDownloadMode === 'new') {
+                                    const newCatId = `cat_${Date.now()}`
+                                    addQuestionCategory({
+                                      id: newCatId,
+                                      groupId: activeGroupId,
+                                      name: libraryNewCategoryName.trim(),
+                                      createdAt: Date.now(),
+                                    })
+                                    targetCategoryId = newCatId
+                                  }
+
+                                  // Add MCQs to the category
+                                  mcqs.forEach(mcq => {
+                                    addGroupMCQ({
+                                      id: `mcq_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+                                      groupId: activeGroupId,
+                                      categoryId: targetCategoryId,
+                                      question: mcq.question,
+                                      options: mcq.options,
+                                      correctIndex: mcq.correctIndex,
+                                      createdBy: user.id,
+                                      createdByName: user.displayName,
+                                      createdAt: Date.now(),
+                                    })
+                                  })
+                                }
+
+                                // Download Notes
+                                if (librarySelectedPack.notesCount > 0) {
+                                  const notes = getLibraryNotesByPack(librarySelectedPack.id)
+                                  
+                                  // Create a new topic for notes
+                                  const topicId = `topic_${Date.now()}`
+                                  addTopic({
+                                    id: topicId,
+                                    groupId: activeGroupId,
+                                    name: librarySelectedPack.title,
+                                    order: groupTopics.length,
+                                    createdAt: Date.now(),
+                                  })
+
+                                  // Add notes as content items
+                                  notes.forEach((note, idx) => {
+                                    addContentItem({
+                                      id: `content_${Date.now()}_${idx}`,
+                                      topicId: topicId,
+                                      subTopicId: '',
+                                      groupId: activeGroupId,
+                                      type: 'note',
+                                      title: note.title,
+                                      content: note.content,
+                                      source: 'library',  // Admin/Library content - trusted
+                                      order: idx,
+                                      createdBy: user.id,
+                                      createdByName: user.displayName,
+                                      createdAt: Date.now(),
+                                      updatedAt: Date.now(),
+                                    })
+                                  })
+                                }
+
+                                // Mark as downloaded
+                                addLibraryDownload({
+                                  id: `dl_${Date.now()}`,
+                                  userId: user.id,
+                                  packId: librarySelectedPack.id,
+                                  packTitle: librarySelectedPack.title,
+                                  subjectId: librarySelectedPack.subjectId,
+                                  topicId: librarySelectedPack.topicId,
+                                  pricing: librarySelectedPack.pricing,
+                                  downloadedAt: Date.now(),
+                                })
+                                
+                                // Success message
+                                const mcqMsg = librarySelectedPack.mcqCount > 0 ? `${librarySelectedPack.mcqCount} MCQs` : ''
+                                const noteMsg = librarySelectedPack.notesCount > 0 ? `${librarySelectedPack.notesCount} Notes` : ''
+                                const separator = mcqMsg && noteMsg ? ' and ' : ''
+                                alert(`✅ ${mcqMsg}${separator}${noteMsg} downloaded successfully!`)
+
+                                // Reset
+                                setLibrarySelectedPack(null)
+                                setLibraryDownloadCategory('')
+                                setLibraryNewCategoryName('')
+                                setLibraryDownloadMode('new')
+                              }}
+                            >
+                              {user && hasLibraryDownloaded(librarySelectedPack.id, user.id) ? (
+                                <>✓ Already Downloaded</>
+                              ) : librarySelectedPack.pricing === 'paid' ? (
+                                <>🔒 Buy for ₹{librarySelectedPack.price}</>
+                              ) : (
+                                <>
+                                  <Download className="h-4 w-4 mr-2" />
+                                  Download Free
+                                </>
+                              )}
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {questionBankTab === 'single' && groupCategories.length === 0 && (
+                      <p className="text-sm text-muted-foreground text-center py-4">
+                        Add a category first to start adding questions.
+                      </p>
+                    )}
+
+                    {/* Categories with Questions */}
+                    <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                      {groupCategories.length === 0 ? (
+                        <p className="text-sm text-muted-foreground text-center py-4">
+                          No categories yet. Add a category first.
+                        </p>
+                      ) : (
+                        groupCategories.map(category => {
+                          const categoryQuestions = getMCQsByCategory(category.id)
+                          const isExpanded = expandedQbCategories.includes(category.id)
+                          
+                          return (
+                            <div key={category.id} className="border rounded-lg overflow-hidden">
+                              {/* Category Header */}
+                              <div 
+                                className="flex items-center justify-between p-2.5 bg-muted/50 cursor-pointer hover:bg-muted"
+                                onClick={() => toggleQbCategory(category.id)}
+                              >
+                                <div className="flex items-center gap-2">
+                                  {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                                  <span className="font-medium text-sm">{category.name}</span>
+                                  <span className="text-xs bg-primary/10 text-primary px-1.5 py-0.5 rounded-full">
+                                    {categoryQuestions.length}
+                                  </span>
+                                </div>
+                                <Button 
+                                  variant="ghost" 
+                                  size="sm"
+                                  className="text-red-500 hover:text-red-700 h-6 w-6 p-0"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    if (confirm(`Delete category "${category.name}" and all its questions?`)) {
+                                      removeQuestionCategory(category.id)
+                                    }
+                                  }}
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
+                              
+                              {/* Questions List */}
+                              {isExpanded && (
+                                <div className="divide-y max-h-[200px] overflow-y-auto">
+                                  {categoryQuestions.length === 0 ? (
+                                    <p className="text-xs text-muted-foreground p-2.5">No questions</p>
+                                  ) : (
+                                    categoryQuestions.map((q, idx) => (
+                                      <div key={q.id} className="p-2.5 hover:bg-muted/30">
+                                        <div className="flex items-start justify-between gap-2">
+                                          <div className="flex-1 min-w-0">
+                                            <p className="text-xs font-medium truncate">{idx + 1}. {q.question}</p>
+                                            <div className="mt-1 grid grid-cols-2 gap-0.5 text-[10px] text-muted-foreground">
+                                              {q.options.map((opt, i) => (
+                                                <span key={i} className={`truncate ${i === q.correctIndex ? 'text-green-600 font-medium' : ''}`}>
+                                                  {i + 1}. {opt} {i === q.correctIndex && '✓'}
+                                                </span>
+                                              ))}
+                                            </div>
+                                          </div>
+                                          <button 
+                                            onClick={() => {
+                                              if (confirm('Delete this question?')) {
+                                                removeGroupMCQ(q.id)
+                                              }
+                                            }} 
+                                            className="text-red-500 hover:text-red-700 flex-shrink-0"
+                                          >
+                                            <Trash2 className="h-3.5 w-3.5" />
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ))
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Group Settings - At Bottom */}
+                <Card className="border-2 border-orange-200 dark:border-orange-800">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <Settings className="h-5 w-5 text-orange-500" />
+                      Group Configuration
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="pt-0 space-y-4">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground">Group Name</label>
+                        <Input 
+                          value={activeGroup?.name || ''} 
+                          onChange={e => activeGroup && updateGroup({ ...activeGroup, name: e.target.value })}
+                          className="h-9"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground">Description</label>
+                        <Input 
+                          value={activeGroup?.description || ''} 
+                          onChange={e => activeGroup && updateGroup({ ...activeGroup, description: e.target.value })}
+                          className="h-9"
+                          placeholder="Optional"
+                        />
+                      </div>
+                    </div>
+                    
+                    <div className="pt-3 border-t space-y-3">
+                      <div className="flex flex-wrap gap-2">
+                        <Button 
+                          onClick={syncAllToCloud}
+                          size="sm"
+                          className="bg-blue-500 hover:bg-blue-600"
+                        >
+                          <Upload className="h-4 w-4 mr-1.5" />
+                          Sync to Cloud
+                        </Button>
+                        <Button 
+                          variant="outline"
+                          size="sm"
+                          className="text-purple-600 border-purple-300 hover:bg-purple-50 dark:hover:bg-purple-950"
+                          onClick={() => {
+                            if (confirm('This will clear all local data and re-download from cloud. Continue?')) {
+                              const state = useGroupStore.getState()
+                              useGroupStore.setState({
+                                topics: state.topics.filter(t => t.groupId !== activeGroupId),
+                                contentItems: state.contentItems.filter(ci => ci.groupId !== activeGroupId),
+                                groupMCQs: state.groupMCQs.filter(m => m.groupId !== activeGroupId),
+                                questionCategories: state.questionCategories.filter(c => c.groupId !== activeGroupId),
+                              })
+                              syncGroupFromCloud(activeGroupId!)
+                              alert('Data cleared and re-syncing from cloud!')
+                            }
+                          }}
+                        >
+                          <RefreshCw className="h-4 w-4 mr-1.5" />
+                          Resync Data
+                        </Button>
+                      </div>
+                      <p className="text-[10px] text-muted-foreground">
+                        Sync uploads content to cloud • Resync fixes duplicate content issues
+                      </p>
+                    </div>
+
+                    <div className="pt-3 border-t">
                       <Button 
                         variant="outline"
-                        className="text-orange-500 border-orange-500 hover:bg-orange-50"
+                        size="sm"
+                        className="text-red-500 border-red-300 hover:bg-red-50 dark:hover:bg-red-950"
                         onClick={() => requestDelete('group', activeGroup!.id, activeGroup!.name)}
                       >
-                        <AlertTriangle className="h-4 w-4 mr-2" />
-                        Request Delete Group
+                        <AlertTriangle className="h-4 w-4 mr-1.5" />
+                        Delete Group
                       </Button>
-                      <p className="text-xs text-muted-foreground mt-2">
-                        Group deletion requires 50% member approval
+                      <p className="text-[10px] text-muted-foreground mt-1.5">
+                        Requires 50% member approval
                       </p>
                     </div>
                   </CardContent>
                 </Card>
-              </TabsContent>
-            )}
+                </>
+              )}
+            </TabsContent>
           </Tabs>
         </>
       )}
@@ -1112,8 +4068,17 @@ export function GroupDashboard() {
             </CardContent>
             <div className="p-4 border-t flex gap-2 justify-end mt-12">
               <Button variant="outline" onClick={() => { setEditingContent(null); setShowEditSourceCode(false) }}>Cancel</Button>
-              <Button onClick={() => {
-                updateContentItem({ ...editingContent, updatedAt: Date.now() })
+              <Button onClick={async () => {
+                const updated = { ...editingContent, updatedAt: Date.now() }
+                updateContentItem(updated)
+                // Also save to Firestore
+                try {
+                  await setDoc(doc(db, 'contentItems', updated.id), updated)
+                  console.log('Content updated in Firestore:', updated.title)
+                } catch (err) {
+                  console.error('Error updating content in Firestore:', err)
+                  alert('❌ Firestore এ update করতে সমস্যা হয়েছে!')
+                }
                 setEditingContent(null)
                 setShowEditSourceCode(false)
               }}>Save</Button>
@@ -1377,19 +4342,212 @@ export function GroupDashboard() {
 
               {/* Quiz - Time limit */}
               {newItemType === 'quiz' && (
-                <div>
-                  <label className="text-sm font-medium mb-1 block">
-                    Time Limit (in minutes) <span className="text-muted-foreground text-xs">Keep blank for no time limit</span>
-                  </label>
-                  <Input 
-                    type="number"
-                    placeholder="Time Limit (in minutes)"
-                    value={quizTimeLimit}
-                    onChange={e => setQuizTimeLimit(e.target.value)}
-                  />
-                  <p className="text-xs text-muted-foreground mt-2">
-                    After creating, you can add questions from the chapter item menu.
-                  </p>
+                <div className="space-y-4">
+                  <div>
+                    <label className="text-sm font-medium mb-1 block">
+                      Time Limit (in minutes) <span className="text-muted-foreground text-xs">Keep blank for no time limit</span>
+                    </label>
+                    <Input 
+                      type="number"
+                      placeholder="Time Limit (in minutes)"
+                      value={quizTimeLimit}
+                      onChange={e => setQuizTimeLimit(e.target.value)}
+                    />
+                  </div>
+                  
+                  {/* Question Bank Selection */}
+                  <div className="border rounded-lg p-3 bg-muted/30">
+                    <div className="flex items-center justify-between mb-3">
+                      <label className="text-sm font-medium">Select Questions from Bank</label>
+                      <span className="text-xs text-muted-foreground">
+                        {selectedQBQuestions.length} selected
+                      </span>
+                    </div>
+                    
+                    {groupCategories.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">
+                        No questions in Question Bank. Add questions from Settings → Question Bank first.
+                      </p>
+                    ) : (
+                      <>
+                        {/* Selection Mode Toggle */}
+                        <div className="flex gap-2 mb-3">
+                          <Button 
+                            type="button"
+                            size="sm" 
+                            variant={quizSelectionMode === 'manual' ? 'default' : 'outline'}
+                            onClick={() => setQuizSelectionMode('manual')}
+                          >
+                            Manual Select
+                          </Button>
+                          <Button 
+                            type="button"
+                            size="sm" 
+                            variant={quizSelectionMode === 'auto' ? 'default' : 'outline'}
+                            onClick={() => setQuizSelectionMode('auto')}
+                          >
+                            Auto Random
+                          </Button>
+                        </div>
+                        
+                        {quizSelectionMode === 'auto' ? (
+                          /* Auto Random Mode */
+                          <div className="space-y-3 p-3 bg-background rounded border">
+                            <div>
+                              <label className="text-xs font-medium mb-1 block">Select Category</label>
+                              <select
+                                className="w-full border rounded p-2 text-sm bg-background"
+                                value={autoRandomCategoryId}
+                                onChange={e => setAutoRandomCategoryId(e.target.value)}
+                              >
+                                <option value="">-- Select Category --</option>
+                                <option value="all">All Categories</option>
+                                {groupCategories.map(cat => {
+                                  const count = groupMCQs.filter((m: GroupMCQ) => m.groupId === activeGroup?.id && m.categoryId === cat.id).length
+                                  return (
+                                    <option key={cat.id} value={cat.id}>
+                                      {cat.name} ({count} questions)
+                                    </option>
+                                  )
+                                })}
+                              </select>
+                            </div>
+                            
+                            <div>
+                              <label className="text-xs font-medium mb-1 block">Number of Questions</label>
+                              <Input
+                                type="number"
+                                placeholder="Enter number of questions"
+                                value={autoRandomCount}
+                                onChange={e => setAutoRandomCount(e.target.value)}
+                                min="1"
+                              />
+                              {autoRandomCategoryId && (
+                                <p className="text-xs text-muted-foreground mt-1">
+                                  Available: {autoRandomCategoryId === 'all' 
+                                    ? groupMCQs.filter((m: GroupMCQ) => m.groupId === activeGroup?.id).length
+                                    : groupMCQs.filter((m: GroupMCQ) => m.groupId === activeGroup?.id && m.categoryId === autoRandomCategoryId).length
+                                  } questions
+                                </p>
+                              )}
+                            </div>
+                            
+                            <Button 
+                              type="button"
+                              size="sm"
+                              className="w-full"
+                              disabled={!autoRandomCategoryId || !autoRandomCount}
+                              onClick={() => {
+                                const count = parseInt(autoRandomCount)
+                                if (!count || count < 1) return
+                                
+                                let availableQuestions: GroupMCQ[]
+                                if (autoRandomCategoryId === 'all') {
+                                  availableQuestions = groupMCQs.filter((m: GroupMCQ) => m.groupId === activeGroup?.id)
+                                } else {
+                                  availableQuestions = groupMCQs.filter((m: GroupMCQ) => m.groupId === activeGroup?.id && m.categoryId === autoRandomCategoryId)
+                                }
+                                
+                                // Shuffle and pick
+                                const shuffled = [...availableQuestions].sort(() => Math.random() - 0.5)
+                                const selected = shuffled.slice(0, Math.min(count, shuffled.length))
+                                setSelectedQBQuestions(selected.map(q => q.id))
+                                
+                                // Reset
+                                setAutoRandomCount('')
+                              }}
+                            >
+                              <Shuffle className="h-4 w-4 mr-2" /> Generate Random Selection
+                            </Button>
+                          </div>
+                        ) : (
+                          /* Manual Mode - Category list */
+                          <div className="space-y-2 max-h-60 overflow-y-auto">
+                            {groupCategories.map(cat => {
+                              const catQuestions = groupMCQs.filter((m: GroupMCQ) => m.groupId === activeGroup?.id && m.categoryId === cat.id)
+                              if (catQuestions.length === 0) return null
+                              
+                              return (
+                                <div key={cat.id} className="border rounded bg-background">
+                                  <button
+                                    type="button"
+                                    className="w-full flex items-center justify-between p-2 hover:bg-muted/50"
+                                    onClick={() => {
+                                      setExpandedQbCategories(prev => 
+                                        prev.includes(cat.id) 
+                                          ? prev.filter(id => id !== cat.id)
+                                          : [...prev, cat.id]
+                                      )
+                                    }}
+                                  >
+                                    <span className="font-medium text-sm">{cat.name}</span>
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-xs text-muted-foreground">{catQuestions.length} questions</span>
+                                      {expandedQbCategories.includes(cat.id) ? (
+                                        <ChevronDown className="h-4 w-4" />
+                                      ) : (
+                                        <ChevronRight className="h-4 w-4" />
+                                      )}
+                                    </div>
+                                  </button>
+                                  
+                                  {expandedQbCategories.includes(cat.id) && (
+                                    <div className="border-t p-2 space-y-1">
+                                      {/* Select All in Category */}
+                                      <button
+                                        type="button"
+                                        className="text-xs text-primary hover:underline mb-2"
+                                        onClick={() => {
+                                          const allInCat = catQuestions.map((q: GroupMCQ) => q.id)
+                                          const allSelected = allInCat.every((id: string) => selectedQBQuestions.includes(id))
+                                          if (allSelected) {
+                                            setSelectedQBQuestions(prev => prev.filter(id => !allInCat.includes(id)))
+                                          } else {
+                                            setSelectedQBQuestions(prev => [...new Set([...prev, ...allInCat])])
+                                          }
+                                        }}
+                                      >
+                                        {catQuestions.every((q: GroupMCQ) => selectedQBQuestions.includes(q.id)) ? 'Deselect All' : 'Select All'}
+                                      </button>
+                                      
+                                      {catQuestions.map((q: GroupMCQ) => (
+                                        <label key={q.id} className="flex items-start gap-2 p-1 hover:bg-muted/30 rounded cursor-pointer">
+                                          <input
+                                            type="checkbox"
+                                            checked={selectedQBQuestions.includes(q.id)}
+                                            onChange={e => {
+                                              if (e.target.checked) {
+                                                setSelectedQBQuestions(prev => [...prev, q.id])
+                                              } else {
+                                                setSelectedQBQuestions(prev => prev.filter(id => id !== q.id))
+                                              }
+                                            }}
+                                            className="mt-1"
+                                          />
+                                          <span className="text-sm">{q.question}</span>
+                                        </label>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
+                        
+                        {/* Clear Selection */}
+                        {selectedQBQuestions.length > 0 && (
+                          <button
+                            type="button"
+                            className="text-xs text-red-500 hover:underline mt-2"
+                            onClick={() => setSelectedQBQuestions([])}
+                          >
+                            Clear Selection ({selectedQBQuestions.length})
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
                 </div>
               )}
             </CardContent>
@@ -1401,6 +4559,83 @@ export function GroupDashboard() {
               <Button onClick={handleSubmitItemDetail} disabled={isUploading}>
                 {isUploading ? 'Uploading...' : 'Submit'}
               </Button>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* Content Viewer Modal - Display Mode */}
+      {viewingContent && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <Card className="w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+            <CardHeader className="flex flex-row items-center justify-between border-b">
+              <CardTitle className="flex items-center gap-2">
+                <FileText className="h-5 w-5 text-blue-500" />
+                {viewingContent.title}
+              </CardTitle>
+              <Button variant="ghost" size="sm" onClick={() => setViewingContent(null)}>
+                <X className="h-4 w-4" />
+              </Button>
+            </CardHeader>
+            <CardContent className="overflow-y-auto p-6">
+              {viewingContent.type === 'note' && viewingContent.content ? (
+                <div 
+                  className="prose prose-sm dark:prose-invert max-w-none
+                    prose-headings:text-foreground 
+                    prose-p:text-foreground 
+                    prose-strong:text-foreground 
+                    prose-li:text-foreground
+                    prose-a:text-primary
+                    [&_h1]:text-2xl [&_h1]:font-bold [&_h1]:mb-4
+                    [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:mb-3
+                    [&_h3]:text-lg [&_h3]:font-medium [&_h3]:mb-2
+                    [&_p]:mb-3 [&_p]:leading-relaxed
+                    [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:mb-3
+                    [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:mb-3
+                    [&_li]:mb-1
+                    [&_blockquote]:border-l-4 [&_blockquote]:border-primary [&_blockquote]:pl-4 [&_blockquote]:italic
+                    [&_code]:bg-muted [&_code]:px-1 [&_code]:rounded
+                    [&_pre]:bg-muted [&_pre]:p-4 [&_pre]:rounded-lg [&_pre]:overflow-x-auto
+                    [&_table]:w-full [&_table]:border-collapse
+                    [&_th]:border [&_th]:border-border [&_th]:p-2 [&_th]:bg-muted
+                    [&_td]:border [&_td]:border-border [&_td]:p-2"
+                  dangerouslySetInnerHTML={{ 
+                    __html: smartSanitize(viewingContent.content, {
+                      source: viewingContent.source,
+                      isAdmin: viewingContent.source === 'library'
+                    })
+                  }}
+                />
+              ) : (
+                <p className="text-muted-foreground">No content available</p>
+              )}
+            </CardContent>
+            <div className="flex justify-between gap-2 p-4 border-t">
+              <ReportDialog
+                groupId={viewingContent.groupId}
+                contentId={viewingContent.id}
+                contentType="note"
+                contentTitle={viewingContent.title}
+                creatorId={viewingContent.createdBy}
+                creatorName={viewingContent.createdByName}
+              />
+              <div className="flex gap-2">
+                {(isAdmin || viewingContent.createdBy === user?.id) && (
+                  <Button 
+                    variant="outline" 
+                    onClick={() => {
+                      setEditingContent(viewingContent)
+                      setEditContent(viewingContent.content || '')
+                      setViewingContent(null)
+                    }}
+                  >
+                    <Pencil className="h-4 w-4 mr-1" /> Edit
+                  </Button>
+                )}
+                <Button variant="outline" onClick={() => setViewingContent(null)}>
+                  Close
+                </Button>
+              </div>
             </div>
           </Card>
         </div>
@@ -1527,6 +4762,78 @@ export function GroupDashboard() {
                   })}
                 </div>
               )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Assign Members Modal */}
+      {showAssignModal && assigningTopicId && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <Card className="w-full max-w-md">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <UserPlus className="h-5 w-5" />
+                Assign Members to Chapter
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Select members who can edit this chapter:
+              </p>
+              <div className="space-y-2 max-h-60 overflow-y-auto">
+                {activeGroup?.members.map(member => (
+                  <label 
+                    key={member.userId}
+                    className="flex items-center gap-3 p-2 rounded-lg hover:bg-muted cursor-pointer"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedMemberIds.includes(member.userId)}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedMemberIds(prev => [...prev, member.userId])
+                        } else {
+                          setSelectedMemberIds(prev => prev.filter(id => id !== member.userId))
+                        }
+                      }}
+                      className="w-4 h-4 rounded"
+                    />
+                    <Avatar className="h-8 w-8">
+                      <AvatarFallback className="bg-primary/10 text-primary">
+                        {member.name.charAt(0).toUpperCase()}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div>
+                      <p className="font-medium text-sm">{member.name}</p>
+                      <p className="text-xs text-muted-foreground capitalize">{member.role}</p>
+                    </div>
+                    {member.role === 'admin' && (
+                      <Crown className="h-4 w-4 text-yellow-500 ml-auto" />
+                    )}
+                  </label>
+                ))}
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <Button variant="outline" onClick={() => {
+                  setShowAssignModal(false)
+                  setAssigningTopicId(null)
+                  setSelectedMemberIds([])
+                }}>
+                  Cancel
+                </Button>
+                <Button onClick={() => {
+                  const topic = topics.find(t => t.id === assigningTopicId)
+                  if (topic) {
+                    updateTopic({ ...topic, assignedMembers: selectedMemberIds })
+                  }
+                  setShowAssignModal(false)
+                  setAssigningTopicId(null)
+                  setSelectedMemberIds([])
+                }}>
+                  Save
+                </Button>
+              </div>
             </CardContent>
           </Card>
         </div>
