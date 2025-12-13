@@ -988,19 +988,19 @@ export function QuestionBankManager({ courseId }: QuestionBankManagerProps) {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-            <Select value={assetFilterSubject} onValueChange={v => { setAssetFilterSubject(v); setAssetFilterTopic('') }}>
+            <Select value={assetFilterSubject || '__all__'} onValueChange={v => { setAssetFilterSubject(v === '__all__' ? '' : v); setAssetFilterTopic('') }}>
               <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="Filter by Subject" /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="">All Subjects</SelectItem>
+                <SelectItem value="__all__">All Subjects</SelectItem>
                 {librarySubjects.map(s => (
                   <SelectItem key={s.id} value={s.id}>{s.icon} {s.name}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            <Select value={assetFilterTopic} onValueChange={setAssetFilterTopic} disabled={!assetFilterSubject}>
+            <Select value={assetFilterTopic || '__all__'} onValueChange={v => setAssetFilterTopic(v === '__all__' ? '' : v)} disabled={!assetFilterSubject}>
               <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="Filter by Topic" /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="">All Topics</SelectItem>
+                <SelectItem value="__all__">All Topics</SelectItem>
                 {assetTopicOptions.map(t => (
                   <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
                 ))}
