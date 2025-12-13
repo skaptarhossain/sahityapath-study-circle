@@ -130,7 +130,7 @@ const SAMPLE_COURSES: Course[] = [
   },
 ];
 
-function CourseCard({ course, onView, onEdit, isTeacher = false }: { course: Course; onView: () => void; onEdit?: () => void; isTeacher?: boolean }) {
+function CourseCard({ course, onView, onEdit, onManage, isTeacher = false }: { course: Course; onView: () => void; onEdit?: () => void; onManage?: () => void; isTeacher?: boolean }) {
   return (
     <motion.div variants={fadeIn} whileHover={{ y: -4 }} className="group bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 overflow-hidden shadow-sm hover:shadow-xl transition-all duration-300">
       <div className="relative h-40 bg-gradient-to-br from-indigo-500 to-purple-600 overflow-hidden">
@@ -179,7 +179,14 @@ function CourseCard({ course, onView, onEdit, isTeacher = false }: { course: Cou
             </span>
             {course.discountPrice && course.price > 0 && <span className="text-sm text-gray-400 line-through">{course.currency === 'BDT' ? '৳' : '$'}{course.price}</span>}
           </div>
-          <Button size="sm" variant="outline" onClick={onView}>View <ChevronRight className="w-4 h-4 ml-1" /></Button>
+          {isTeacher ? (
+            <Button size="sm" onClick={onManage}>
+              <BookOpen className="w-4 h-4 mr-1" />
+              Manage
+            </Button>
+          ) : (
+            <Button size="sm" variant="outline" onClick={onView}>View <ChevronRight className="w-4 h-4 ml-1" /></Button>
+          )}
         </div>
       </div>
     </motion.div>
@@ -382,7 +389,7 @@ export function CoachingDashboard() {
                   {myCourses.length > 0 ? (
                     <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
                       {myCourses.map((course) => (
-                        <CourseCard key={course.id} course={course} isTeacher onView={() => setSelectedCourse(course.id)} onEdit={() => { setEditingCourse(course); setShowCourseForm(true); }} />
+                        <CourseCard key={course.id} course={course} isTeacher onView={() => setSelectedCourse(course.id)} onEdit={() => { setEditingCourse(course); setShowCourseForm(true); }} onManage={() => setManagingCourse(course.id)} />
                       ))}
                     </div>
                   ) : (
