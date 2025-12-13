@@ -512,7 +512,7 @@ export interface InlineSection {
 export interface InlineLesson {
   id: string
   title: string
-  type: 'video' | 'note' | 'quiz' | 'pdf' | 'link' | 'live-class'
+  type: 'video' | 'note' | 'quiz' | 'pdf' | 'link' | 'live-class' | 'live-test'
   content?: string
   quizQuestions?: InlineMCQ[]
   duration?: number

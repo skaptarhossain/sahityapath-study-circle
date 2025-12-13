@@ -24,15 +24,30 @@ import {
   SlidersHorizontal,
   ArrowUpDown,
   X,
+  Brain,
+  HelpCircle,
+  Calendar,
+  RefreshCw,
+  Trash2,
+  Eye,
+  Copy,
+  Crown,
+  Timer,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { useCoachingStore } from '@/stores/coaching-store';
 import { useAuthStore } from '@/stores/auth-store';
 import { TeacherProfileForm } from './teacher-profile-form';
 import { CreateCourseForm } from './create-course-form';
 import { CourseDetailPage } from './course-detail-page';
 import { CourseContentManager } from './course-content-manager';
+import { LiveTestManager } from './live-test-manager';
+import { QuestionBankManager } from './question-bank-manager';
+import { StudentManagement } from './student-management';
 import type { Course } from '@/types';
 
 const fadeIn = {
@@ -218,6 +233,7 @@ export function CoachingDashboard() {
   const { user } = useAuthStore();
   const { courses, teachers, myCourses, teacherProfile, loadFromFirestore } = useCoachingStore();
   const [view, setView] = useState<'teacher' | 'student'>('student');
+  const [teacherTab, setTeacherTab] = useState<'courses' | 'settings'>('courses');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
@@ -378,29 +394,85 @@ export function CoachingDashboard() {
                   <StatsCard icon={DollarSign} label="Revenue" value={`৳${teacherStats.totalRevenue.toLocaleString()}`} trend="+8%" color="amber" />
                   <StatsCard icon={Star} label="Avg Rating" value={teacherStats.avgRating} color="rose" />
                 </div>
-                <div className="flex flex-wrap gap-3">
-                  <Button onClick={() => setShowCourseForm(true)}><Plus className="w-4 h-4 mr-2" />Create Course</Button>
-                  <Button variant="outline" onClick={() => setShowProfileForm(true)}><Settings className="w-4 h-4 mr-2" />Edit Profile</Button>
-                  <Button variant="outline"><BarChart3 className="w-4 h-4 mr-2" />Analytics</Button>
-                  <Button variant="outline"><MessageSquare className="w-4 h-4 mr-2" />Messages</Button>
-                </div>
-                <div>
-                  <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">My Courses</h2>
-                  {myCourses.length > 0 ? (
-                    <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                      {myCourses.map((course) => (
-                        <CourseCard key={course.id} course={course} isTeacher onView={() => setSelectedCourse(course.id)} onEdit={() => { setEditingCourse(course); setShowCourseForm(true); }} onManage={() => setManagingCourse(course.id)} />
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="text-center py-12 bg-white dark:bg-gray-900 rounded-2xl border border-dashed border-gray-300 dark:border-gray-700">
-                      <BookOpen className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
-                      <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">No courses yet</h3>
-                      <p className="text-gray-500 dark:text-gray-400 mb-4">Create your first course and start teaching!</p>
+                
+                {/* Teacher Tabs */}
+                <Tabs value={teacherTab} onValueChange={(v) => setTeacherTab(v as typeof teacherTab)} className="w-full">
+                  <TabsList className="grid w-full grid-cols-2 mb-6">
+                    <TabsTrigger value="courses"><BookOpen className="h-4 w-4 mr-2" /> My Courses</TabsTrigger>
+                    <TabsTrigger value="settings"><Settings className="h-4 w-4 mr-2" /> Settings</TabsTrigger>
+                  </TabsList>
+                  
+                  {/* Courses Tab */}
+                  <TabsContent value="courses" className="space-y-6">
+                    <div className="flex flex-wrap gap-3">
                       <Button onClick={() => setShowCourseForm(true)}><Plus className="w-4 h-4 mr-2" />Create Course</Button>
+                      <Button variant="outline" onClick={() => setShowProfileForm(true)}><Settings className="w-4 h-4 mr-2" />Edit Profile</Button>
+                      <Button variant="outline"><BarChart3 className="w-4 h-4 mr-2" />Analytics</Button>
+                      <Button variant="outline"><MessageSquare className="w-4 h-4 mr-2" />Messages</Button>
                     </div>
-                  )}
-                </div>
+                    <div>
+                      <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">My Courses</h2>
+                      {myCourses.length > 0 ? (
+                        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                          {myCourses.map((course) => (
+                            <CourseCard key={course.id} course={course} isTeacher onView={() => setSelectedCourse(course.id)} onEdit={() => { setEditingCourse(course); setShowCourseForm(true); }} onManage={() => setManagingCourse(course.id)} />
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-center py-12 bg-white dark:bg-gray-900 rounded-2xl border border-dashed border-gray-300 dark:border-gray-700">
+                          <BookOpen className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
+                          <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">No courses yet</h3>
+                          <p className="text-gray-500 dark:text-gray-400 mb-4">Create your first course and start teaching!</p>
+                          <Button onClick={() => setShowCourseForm(true)}><Plus className="w-4 h-4 mr-2" />Create Course</Button>
+                        </div>
+                      )}
+                    </div>
+                  </TabsContent>
+                  
+                  {/* Settings Tab */}
+                  <TabsContent value="settings" className="space-y-6">
+                    {/* Page Title */}
+                    <div className="flex items-center gap-2">
+                      <Settings className="h-5 w-5 text-primary" />
+                      <h2 className="text-lg font-semibold">Teacher Settings</h2>
+                    </div>
+
+                    {/* Students Section */}
+                    <StudentManagement />
+
+                    {/* Live Test Management */}
+                    <Card className="border-2 border-cyan-200 dark:border-cyan-800">
+                      <CardHeader className="pb-3">
+                        <CardTitle className="flex items-center gap-2 text-base">
+                          <Timer className="h-5 w-5 text-cyan-500" />
+                          Live Test Management
+                        </CardTitle>
+                        <p className="text-xs text-muted-foreground">
+                          Schedule and manage live tests for your students
+                        </p>
+                      </CardHeader>
+                      <CardContent className="pt-0">
+                        <LiveTestManager />
+                      </CardContent>
+                    </Card>
+
+                    {/* Question Bank */}
+                    <Card className="border-2 border-green-200 dark:border-green-800">
+                      <CardHeader className="pb-3">
+                        <CardTitle className="flex items-center gap-2 text-base">
+                          <HelpCircle className="h-5 w-5 text-green-500" />
+                          Question Bank
+                        </CardTitle>
+                        <p className="text-xs text-muted-foreground">
+                          Create and manage your question bank for quizzes and tests
+                        </p>
+                      </CardHeader>
+                      <CardContent className="pt-0">
+                        <QuestionBankManager />
+                      </CardContent>
+                    </Card>
+                  </TabsContent>
+                </Tabs>
               </>
             )}
           </motion.div>

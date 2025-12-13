@@ -22,6 +22,7 @@ import {
   ExternalLink,
   CheckCircle2,
   ArrowLeft,
+  Timer,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -43,11 +44,12 @@ interface CourseContentManagerProps {
   onBack: () => void;
 }
 
-type ContentType = 'video' | 'note' | 'quiz' | 'pdf' | 'link' | 'live-class';
+type ContentType = 'video' | 'note' | 'quiz' | 'pdf' | 'link' | 'live-class' | 'live-test';
 
 const CONTENT_TYPES: { type: ContentType; label: string; icon: React.ComponentType<{ className?: string }>; color: string }[] = [
   { type: 'note', label: 'Notes', icon: FileText, color: 'blue' },
   { type: 'quiz', label: 'Quiz', icon: HelpCircle, color: 'green' },
+  { type: 'live-test', label: 'Live Test', icon: Timer, color: 'cyan' },
   { type: 'video', label: 'Video', icon: Video, color: 'purple' },
   { type: 'link', label: 'External Link', icon: Link2, color: 'orange' },
   { type: 'pdf', label: 'PDF', icon: File, color: 'red' },
@@ -145,8 +147,8 @@ export function CourseContentManager({ courseId, onBack }: CourseContentManagerP
       id: `lesson-${Date.now()}`,
       title: newContentTitle.trim(),
       type: addContentType,
-      content: addContentType === 'quiz' ? '' : newContentData,
-      quizQuestions: addContentType === 'quiz' ? quizQuestions : undefined,
+      content: (addContentType === 'quiz' || addContentType === 'live-test') ? '' : newContentData,
+      quizQuestions: (addContentType === 'quiz' || addContentType === 'live-test') ? quizQuestions : undefined,
       duration: 0,
       order: sections.find((s) => s.id === addingToSection)?.lessons.length || 0,
     };
@@ -268,6 +270,7 @@ export function CourseContentManager({ courseId, onBack }: CourseContentManagerP
     switch (type) {
       case 'note': return <FileText className="w-4 h-4" />;
       case 'quiz': return <HelpCircle className="w-4 h-4" />;
+      case 'live-test': return <Timer className="w-4 h-4" />;
       case 'video': return <Video className="w-4 h-4" />;
       case 'link': return <Link2 className="w-4 h-4" />;
       case 'pdf': return <File className="w-4 h-4" />;
@@ -280,6 +283,7 @@ export function CourseContentManager({ courseId, onBack }: CourseContentManagerP
     switch (type) {
       case 'note': return 'text-blue-500 bg-blue-100 dark:bg-blue-900/30';
       case 'quiz': return 'text-green-500 bg-green-100 dark:bg-green-900/30';
+      case 'live-test': return 'text-cyan-500 bg-cyan-100 dark:bg-cyan-900/30';
       case 'video': return 'text-purple-500 bg-purple-100 dark:bg-purple-900/30';
       case 'link': return 'text-orange-500 bg-orange-100 dark:bg-orange-900/30';
       case 'pdf': return 'text-red-500 bg-red-100 dark:bg-red-900/30';
@@ -486,9 +490,44 @@ export function CourseContentManager({ courseId, onBack }: CourseContentManagerP
                         </div>
                       </div>
                     )}
+                    {addContentType === 'live-test' && (
+                      <div className="space-y-4">
+                        <div className="p-3 bg-cyan-50 dark:bg-cyan-900/20 rounded-lg border border-cyan-200 dark:border-cyan-800">
+                          <div className="flex items-center gap-2 text-cyan-700 dark:text-cyan-300">
+                            <Timer className="w-4 h-4" />
+                            <span className="text-sm font-medium">Live Test - Students will be timed</span>
+                          </div>
+                        </div>
+                        {quizQuestions.length > 0 && (
+                          <div className="space-y-2">
+                            <h4 className="font-medium">Questions ({quizQuestions.length})</h4>
+                            {quizQuestions.map((q, idx) => (
+                              <div key={q.id} className="p-3 bg-gray-50 dark:bg-gray-900 rounded-lg flex items-center justify-between">
+                                <span className="text-sm">{idx + 1}. {q.question}</span>
+                                <Button variant="ghost" size="sm" onClick={() => setQuizQuestions(quizQuestions.filter((qq) => qq.id !== q.id))}><Trash2 className="w-4 h-4 text-red-500" /></Button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <div className="p-4 border dark:border-gray-700 rounded-xl space-y-3">
+                          <h4 className="font-medium">Add Question</h4>
+                          <Textarea placeholder="Enter question..." value={newQuestion} onChange={(e) => setNewQuestion(e.target.value)} />
+                          <div className="grid grid-cols-2 gap-2">
+                            {newOptions.map((opt, idx) => (
+                              <div key={idx} className="flex items-center gap-2">
+                                <button onClick={() => setCorrectIndex(idx)} className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${correctIndex === idx ? 'bg-green-500 text-white' : 'bg-gray-200 dark:bg-gray-700'}`}>{String.fromCharCode(65 + idx)}</button>
+                                <Input placeholder={`Option ${String.fromCharCode(65 + idx)}`} value={opt} onChange={(e) => { const newOpts = [...newOptions]; newOpts[idx] = e.target.value; setNewOptions(newOpts); }} className="flex-1" />
+                              </div>
+                            ))}
+                          </div>
+                          <p className="text-xs text-gray-500">Click the letter to mark correct answer (green = correct)</p>
+                          <Button onClick={handleAddQuizQuestion} className="w-full"><Plus className="w-4 h-4 mr-2" />Add Question</Button>
+                        </div>
+                      </div>
+                    )}
                     <div className="flex gap-2 pt-4">
                       <Button variant="outline" onClick={() => setAddContentType(null)} className="flex-1">Back</Button>
-                      <Button onClick={handleAddContent} disabled={!newContentTitle.trim() || (addContentType === 'quiz' && quizQuestions.length === 0)} className="flex-1"><Save className="w-4 h-4 mr-2" />Save Content</Button>
+                      <Button onClick={handleAddContent} disabled={!newContentTitle.trim() || ((addContentType === 'quiz' || addContentType === 'live-test') && quizQuestions.length === 0)} className="flex-1"><Save className="w-4 h-4 mr-2" />Save Content</Button>
                     </div>
                   </div>
                 )}
