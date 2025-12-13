@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Plus,
@@ -23,11 +23,17 @@ import {
   CheckCircle2,
   ArrowLeft,
   Timer,
+  Library,
+  Search,
+  Filter,
+  Download,
+  BookOpen,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -35,9 +41,30 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useCoachingStore } from '@/stores/coaching-store';
+import { useLibraryStore } from '@/stores/library-store';
+import { useAuthStore } from '@/stores/auth-store';
+import { db } from '@/config/firebase';
+import { collection, doc, getDocs, query, setDoc, where } from 'firebase/firestore';
+import { v4 as uuidv4 } from 'uuid';
 import ReactQuill from 'react-quill';
 import 'react-quill/dist/quill.snow.css';
 import type { InlineSection, InlineLesson, InlineMCQ } from '@/types';
+
+// Asset item stored in Firestore
+interface CourseAsset {
+  id: string;
+  title: string;
+  type: ContentType;
+  content?: string;
+  quizQuestions?: InlineMCQ[];
+  subjectId?: string;
+  topicId?: string;
+  subtopic?: string;
+  courseId?: string;
+  createdAt: number;
+  createdBy?: string;
+  createdByName?: string;
+}
 
 interface CourseContentManagerProps {
   courseId: string;
@@ -69,6 +96,8 @@ const quillModules = {
 
 export function CourseContentManager({ courseId, onBack }: CourseContentManagerProps) {
   const { courses, updateCourse } = useCoachingStore();
+  const { user } = useAuthStore();
+  const { subjects: librarySubjects, topics: libraryTopics } = useLibraryStore();
   const course = courses.find((c) => c.id === courseId);
 
   const [isEditMode, setIsEditMode] = useState(false);
@@ -97,6 +126,52 @@ export function CourseContentManager({ courseId, onBack }: CourseContentManagerP
   const [renameSectionTitle, setRenameSectionTitle] = useState('');
   const [renamingLesson, setRenamingLesson] = useState<string | null>(null);
   const [renameLessonTitle, setRenameLessonTitle] = useState('');
+
+  // Asset Library state
+  const [showLibrary, setShowLibrary] = useState(false);
+  const [courseAssets, setCourseAssets] = useState<CourseAsset[]>([]);
+  const [assetSearch, setAssetSearch] = useState('');
+  const [assetFilterType, setAssetFilterType] = useState<'all' | ContentType>('all');
+  const [assetFilterSubject, setAssetFilterSubject] = useState('');
+  const [assetFilterTopic, setAssetFilterTopic] = useState('');
+  const [loadingAssets, setLoadingAssets] = useState(false);
+  const [targetSectionForAsset, setTargetSectionForAsset] = useState<string | null>(null);
+
+  // Load assets from Firestore
+  useEffect(() => {
+    const loadAssets = async () => {
+      setLoadingAssets(true);
+      try {
+        const snapshot = await getDocs(collection(db, 'course-assets'));
+        const loaded = snapshot.docs
+          .map((doc) => doc.data() as CourseAsset)
+          .filter((a) => !a.courseId || a.courseId === 'global' || a.courseId === courseId);
+        setCourseAssets(loaded.sort((a, b) => b.createdAt - a.createdAt));
+      } catch (err) {
+        console.error('Error loading assets', err);
+      } finally {
+        setLoadingAssets(false);
+      }
+    };
+    loadAssets();
+  }, [courseId]);
+
+  // Filter assets
+  const filteredAssets = useMemo(() => {
+    return courseAssets.filter((asset) => {
+      if (assetFilterType !== 'all' && asset.type !== assetFilterType) return false;
+      if (assetFilterSubject && asset.subjectId !== assetFilterSubject) return false;
+      if (assetFilterTopic && asset.topicId !== assetFilterTopic) return false;
+      if (assetSearch && !asset.title.toLowerCase().includes(assetSearch.toLowerCase())) return false;
+      return true;
+    });
+  }, [courseAssets, assetFilterType, assetFilterSubject, assetFilterTopic, assetSearch]);
+
+  const assetTopicOptions = useMemo(() => {
+    return assetFilterSubject
+      ? libraryTopics.filter((t) => t.subjectId === assetFilterSubject && t.isActive)
+      : libraryTopics.filter((t) => t.isActive);
+  }, [assetFilterSubject, libraryTopics]);
 
   useEffect(() => {
     if (course?.sections) {
@@ -159,6 +234,23 @@ export function CourseContentManager({ courseId, onBack }: CourseContentManagerP
       return section;
     });
     updateCourse({ ...course, sections: updatedSections });
+
+    // Auto-save to Asset Library
+    const assetId = uuidv4();
+    const newAsset: CourseAsset = {
+      id: assetId,
+      title: newContentTitle.trim(),
+      type: addContentType,
+      content: (addContentType === 'quiz' || addContentType === 'live-test') ? '' : newContentData,
+      quizQuestions: (addContentType === 'quiz' || addContentType === 'live-test') ? quizQuestions : undefined,
+      courseId: 'global', // Make available globally
+      createdAt: Date.now(),
+      createdBy: user?.id,
+      createdByName: user?.displayName,
+    };
+    setCourseAssets((prev) => [newAsset, ...prev]);
+    setDoc(doc(db, 'course-assets', assetId), newAsset).catch((err) => console.error('Error saving asset', err));
+
     setAddingToSection(null);
     setAddContentType(null);
     setNewContentTitle('');
@@ -193,6 +285,28 @@ export function CourseContentManager({ courseId, onBack }: CourseContentManagerP
     updateCourse({ ...course, sections: updatedSections });
     setRenamingSection(null);
     setRenameSectionTitle('');
+  };
+
+  // Load asset from library into a section
+  const handleLoadAssetToSection = (asset: CourseAsset, sectionId: string) => {
+    const newLesson: InlineLesson = {
+      id: `lesson-${Date.now()}`,
+      title: asset.title,
+      type: asset.type,
+      content: asset.content || '',
+      quizQuestions: asset.quizQuestions,
+      duration: 0,
+      order: sections.find((s) => s.id === sectionId)?.lessons.length || 0,
+    };
+    const updatedSections = sections.map((section) => {
+      if (section.id === sectionId) {
+        return { ...section, lessons: [...section.lessons, newLesson] };
+      }
+      return section;
+    });
+    updateCourse({ ...course, sections: updatedSections });
+    setShowLibrary(false);
+    setTargetSectionForAsset(null);
   };
 
   const handleDeleteLesson = (sectionId: string, lessonId: string) => {
@@ -306,10 +420,18 @@ export function CourseContentManager({ courseId, onBack }: CourseContentManagerP
                 <p className="text-sm text-gray-500">Course Content Manager</p>
               </div>
             </div>
-            <div className="flex items-center gap-3">
-              <span className={`text-sm font-medium ${!isEditMode ? 'text-blue-600' : 'text-gray-400'}`}>Display</span>
-              <Switch checked={isEditMode} onCheckedChange={setIsEditMode} />
-              <span className={`text-sm font-medium ${isEditMode ? 'text-orange-600' : 'text-gray-400'}`}>Edit Mode</span>
+            <div className="flex items-center gap-4">
+              {isEditMode && (
+                <Button variant="outline" size="sm" onClick={() => setShowLibrary(true)} className="gap-2">
+                  <Library className="w-4 h-4" />
+                  View Library
+                </Button>
+              )}
+              <div className="flex items-center gap-3">
+                <span className={`text-sm font-medium ${!isEditMode ? 'text-blue-600' : 'text-gray-400'}`}>Display</span>
+                <Switch checked={isEditMode} onCheckedChange={setIsEditMode} />
+                <span className={`text-sm font-medium ${isEditMode ? 'text-orange-600' : 'text-gray-400'}`}>Edit Mode</span>
+              </div>
             </div>
           </div>
         </div>
@@ -635,6 +757,124 @@ export function CourseContentManager({ courseId, onBack }: CourseContentManagerP
                     ))}
                   </div>
                 )}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Asset Library Modal */}
+      <AnimatePresence>
+        {showLibrary && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => { setShowLibrary(false); setTargetSectionForAsset(null); }}>
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+              <div className="p-6 border-b dark:border-gray-700">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <Library className="w-6 h-6 text-indigo-500" />
+                    <div>
+                      <h2 className="text-xl font-bold">Asset Library</h2>
+                      <p className="text-sm text-gray-500">Browse and load saved content into your course</p>
+                    </div>
+                  </div>
+                  <Button variant="ghost" size="icon" onClick={() => { setShowLibrary(false); setTargetSectionForAsset(null); }}><X className="w-5 h-5" /></Button>
+                </div>
+              </div>
+
+              <div className="p-4 border-b dark:border-gray-700 space-y-3">
+                <div className="flex flex-wrap gap-2">
+                  <div className="relative flex-1 min-w-[200px]">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                    <Input value={assetSearch} onChange={(e) => setAssetSearch(e.target.value)} placeholder="Search assets..." className="pl-9" />
+                  </div>
+                  <Select value={assetFilterType} onValueChange={(v) => setAssetFilterType(v as any)}>
+                    <SelectTrigger className="w-[140px]"><SelectValue placeholder="Type" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Types</SelectItem>
+                      {CONTENT_TYPES.map((ct) => (
+                        <SelectItem key={ct.type} value={ct.type}>{ct.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select value={assetFilterSubject || '__all__'} onValueChange={(v) => { setAssetFilterSubject(v === '__all__' ? '' : v); setAssetFilterTopic(''); }}>
+                    <SelectTrigger className="w-[140px]"><SelectValue placeholder="Subject" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__all__">All Subjects</SelectItem>
+                      {librarySubjects.map((s) => (
+                        <SelectItem key={s.id} value={s.id}>{s.icon} {s.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select value={assetFilterTopic || '__all__'} onValueChange={(v) => setAssetFilterTopic(v === '__all__' ? '' : v)} disabled={!assetFilterSubject}>
+                    <SelectTrigger className="w-[140px]"><SelectValue placeholder="Topic" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__all__">All Topics</SelectItem>
+                      {assetTopicOptions.map((t) => (
+                        <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {!targetSectionForAsset && sections.length > 0 && (
+                  <div className="flex items-center gap-2 text-sm">
+                    <span className="text-gray-500">Load to:</span>
+                    <Select value={targetSectionForAsset || '__none__'} onValueChange={(v) => setTargetSectionForAsset(v === '__none__' ? null : v)}>
+                      <SelectTrigger className="w-[200px]"><SelectValue placeholder="Select section" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">Select a section...</SelectItem>
+                        {sections.map((s) => (
+                          <SelectItem key={s.id} value={s.id}>{s.title}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-4">
+                {loadingAssets ? (
+                  <div className="text-center py-12 text-gray-500">Loading assets...</div>
+                ) : filteredAssets.length === 0 ? (
+                  <div className="text-center py-12">
+                    <BookOpen className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+                    <p className="text-gray-500">No assets found</p>
+                    <p className="text-sm text-gray-400">Content you add to courses will appear here</p>
+                  </div>
+                ) : (
+                  <div className="grid gap-3">
+                    {filteredAssets.map((asset) => {
+                      const subject = librarySubjects.find((s) => s.id === asset.subjectId);
+                      const topic = libraryTopics.find((t) => t.id === asset.topicId);
+                      return (
+                        <div key={asset.id} className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-900 rounded-xl border dark:border-gray-700 hover:border-indigo-300 dark:hover:border-indigo-700 transition-colors">
+                          <div className={`p-2 rounded-lg ${getContentColor(asset.type)}`}>{getContentIcon(asset.type)}</div>
+                          <div className="flex-1 min-w-0">
+                            <p className="font-medium text-gray-900 dark:text-white truncate">{asset.title}</p>
+                            <div className="flex items-center gap-2 text-xs text-gray-500 mt-0.5">
+                              <span className="capitalize">{asset.type}</span>
+                              {subject && <span>• {subject.name}</span>}
+                              {topic && <span>• {topic.name}</span>}
+                              {asset.quizQuestions && <span>• {asset.quizQuestions.length} questions</span>}
+                            </div>
+                          </div>
+                          <Button
+                            size="sm"
+                            disabled={!targetSectionForAsset}
+                            onClick={() => targetSectionForAsset && handleLoadAssetToSection(asset, targetSectionForAsset)}
+                            className="gap-1"
+                          >
+                            <Download className="w-4 h-4" />
+                            Load
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="p-4 border-t dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
+                <p className="text-xs text-gray-500 text-center">{courseAssets.length} total assets • Content added to courses is auto-saved here</p>
               </div>
             </motion.div>
           </motion.div>
