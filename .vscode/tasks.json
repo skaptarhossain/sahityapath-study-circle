@@ -1,0 +1,44 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "🔄 Git Sync (Pull + Push)",
+      "type": "shell",
+      "command": "git pull && git add . && git commit -m 'Auto sync - $(date +%Y-%m-%d\\ %H:%M)' && git push",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    },
+    {
+      "label": "⬇️ Git Pull (কাজ শুরুতে)",
+      "type": "shell",
+      "command": "git pull",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always"
+      }
+    },
+    {
+      "label": "⬆️ Git Push (কাজ শেষে)",
+      "type": "shell",
+      "command": "git add . && git commit -m 'Update - $(date +%Y-%m-%d\\ %H:%M)' && git push",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always"
+      }
+    },
+    {
+      "label": "🚀 Start Dev Server",
+      "type": "shell",
+      "command": "npm run dev",
+      "problemMatcher": [],
+      "isBackground": true,
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    }
+  ]
+}
