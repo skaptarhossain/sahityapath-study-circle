@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   GraduationCap,
@@ -209,7 +209,7 @@ function StatsCard({ icon: Icon, label, value, trend, color }: { icon: React.Ele
 
 export function CoachingDashboard() {
   const { user } = useAuthStore();
-  const { courses, teachers, myCourses, teacherProfile } = useCoachingStore();
+  const { courses, teachers, myCourses, teacherProfile, loadFromFirestore } = useCoachingStore();
   const [view, setView] = useState<'teacher' | 'student'>('student');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
@@ -228,6 +228,13 @@ export function CoachingDashboard() {
   const [sortBy, setSortBy] = useState<string>('popular');
   const [selectedTeacher, setSelectedTeacher] = useState<string>('all');
   const [activeLetter, setActiveLetter] = useState<string | null>(null);
+
+  // Load data from Firestore on mount
+  useEffect(() => {
+    if (user?.id) {
+      loadFromFirestore(user.id);
+    }
+  }, [user?.id, loadFromFirestore]);
 
   // Check both teachers array and teacherProfile for current user
   const currentTeacher = teachers.find((t) => t.userId === user?.id) ?? 

@@ -1,5 +1,14 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { 
+  saveTeacherProfile as saveTeacherToFirestore,
+  saveCourse as saveCourseToFirestore,
+  deleteCourse as deleteCourseFromFirestore,
+  getTeacherProfile as getTeacherFromFirestore,
+  getCoursesByTeacher as getCoursesFromFirestore,
+  getAllCourses as getAllCoursesFromFirestore,
+  getAllTeachers as getAllTeachersFromFirestore
+} from '@/services/coaching-firestore'
 import type {
   TeacherProfile,
   Course,
@@ -56,6 +65,9 @@ interface CoachingState {
   activeView: 'teacher' | 'student'
   
   // ================== ACTIONS ==================
+  
+  // Firestore Sync
+  loadFromFirestore: (userId: string) => Promise<void>
   
   // Teacher Actions
   addTeacher: (teacher: TeacherProfile) => void
@@ -222,6 +234,37 @@ export const useCoachingStore = create<CoachingState>()(
 
       // ================== ACTIONS ==================
 
+      // Firestore Sync
+      loadFromFirestore: async (userId: string) => {
+        try {
+          // Load teacher profile
+          const profile = await getTeacherFromFirestore(userId);
+          if (profile) {
+            set({ teacherProfile: profile });
+          }
+          
+          // Load all teachers
+          const teachers = await getAllTeachersFromFirestore();
+          if (teachers.length > 0) {
+            set({ teachers });
+          }
+          
+          // Load user's courses
+          const myCourses = await getCoursesFromFirestore(userId);
+          if (myCourses.length > 0) {
+            set({ myCourses });
+          }
+          
+          // Load all courses
+          const allCourses = await getAllCoursesFromFirestore();
+          if (allCourses.length > 0) {
+            set({ courses: allCourses });
+          }
+        } catch (error) {
+          console.error('Error loading from Firestore:', error);
+        }
+      },
+
       // Teacher Actions
       addTeacher: (teacher) => set(state => ({
         teachers: [...state.teachers, teacher],
@@ -242,32 +285,55 @@ export const useCoachingStore = create<CoachingState>()(
       })),
 
       // Teacher Profile
-      setTeacherProfile: (profile) => set({ teacherProfile: profile }),
-      updateTeacherProfile: (updates) => set(state => ({
-        teacherProfile: state.teacherProfile 
+      setTeacherProfile: (profile) => {
+        set({ teacherProfile: profile });
+        // Sync to Firestore
+        if (profile) {
+          saveTeacherToFirestore(profile).catch(console.error);
+        }
+      },
+      updateTeacherProfile: (updates) => set(state => {
+        const updatedProfile = state.teacherProfile 
           ? { ...state.teacherProfile, ...updates, updatedAt: new Date() }
-          : null
-      })),
+          : null;
+        // Sync to Firestore
+        if (updatedProfile) {
+          saveTeacherToFirestore(updatedProfile).catch(console.error);
+        }
+        return { teacherProfile: updatedProfile };
+      }),
 
       // Course Actions
       setCourses: (courses) => set({ courses }),
-      addCourse: (course) => set(state => ({
-        courses: [...state.courses, course],
-        myCourses: [...state.myCourses, course]
-      })),
-      updateCourse: (course) => set(state => ({
-        courses: state.courses.map(c => c.id === course.id ? course : c),
-        myCourses: state.myCourses.map(c => c.id === course.id ? course : c)
-      })),
-      removeCourse: (courseId) => set(state => ({
-        courses: state.courses.filter(c => c.id !== courseId),
-        myCourses: state.myCourses.filter(c => c.id !== courseId),
-        sections: state.sections.filter(s => s.courseId !== courseId),
-        lessons: state.lessons.filter(l => l.courseId !== courseId),
-        mcqs: state.mcqs.filter(m => m.courseId !== courseId),
-        mockTests: state.mockTests.filter(t => t.courseId !== courseId),
-        liveTests: state.liveTests.filter(t => t.courseId !== courseId)
-      })),
+      addCourse: (course) => {
+        set(state => ({
+          courses: [...state.courses, course],
+          myCourses: [...state.myCourses, course]
+        }));
+        // Sync to Firestore
+        saveCourseToFirestore(course).catch(console.error);
+      },
+      updateCourse: (course) => {
+        set(state => ({
+          courses: state.courses.map(c => c.id === course.id ? course : c),
+          myCourses: state.myCourses.map(c => c.id === course.id ? course : c)
+        }));
+        // Sync to Firestore
+        saveCourseToFirestore(course).catch(console.error);
+      },
+      removeCourse: (courseId) => {
+        set(state => ({
+          courses: state.courses.filter(c => c.id !== courseId),
+          myCourses: state.myCourses.filter(c => c.id !== courseId),
+          sections: state.sections.filter(s => s.courseId !== courseId),
+          lessons: state.lessons.filter(l => l.courseId !== courseId),
+          mcqs: state.mcqs.filter(m => m.courseId !== courseId),
+          mockTests: state.mockTests.filter(t => t.courseId !== courseId),
+          liveTests: state.liveTests.filter(t => t.courseId !== courseId)
+        }));
+        // Delete from Firestore
+        deleteCourseFromFirestore(courseId).catch(console.error);
+      },
       setActiveCourse: (courseId) => set({ activeCourseId: courseId }),
 
       // Section Actions
