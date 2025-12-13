@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   Plus,
@@ -14,6 +14,9 @@ import {
   FileSpreadsheet,
   FileText,
   X,
+  Link2,
+  BookOpen,
+  FolderPlus,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -23,7 +26,7 @@ import { useCoachingStore } from '@/stores/coaching-store'
 import { useLibraryStore } from '@/stores/library-store'
 import { useAuthStore } from '@/stores/auth-store'
 import { db } from '@/config/firebase'
-import { doc, setDoc } from 'firebase/firestore'
+import { collection, doc, getDocs, query, setDoc, where } from 'firebase/firestore'
 import * as XLSX from 'xlsx'
 import mammoth from 'mammoth'
 import { v4 as uuidv4 } from 'uuid'
@@ -36,6 +39,20 @@ interface QuestionCategory {
   topicId: string
   subtopic?: string
   createdAt: number
+}
+
+interface AssetLibraryItem {
+  id: string
+  title: string
+  type: 'note' | 'quiz' | 'link'
+  url?: string
+  description?: string
+  subjectId: string
+  topicId: string
+  subtopic?: string
+  createdAt: number
+  createdBy?: string
+  createdByName?: string
 }
 
 interface QuestionBankManagerProps {
@@ -65,7 +82,7 @@ export function QuestionBankManager({ courseId }: QuestionBankManagerProps) {
     hasDownloaded: hasLibraryDownloaded,
   } = useLibraryStore()
 
-  const [questionBankTab, setQuestionBankTab] = useState<'single' | 'group' | 'instant'>('single')
+  const [questionBankTab, setQuestionBankTab] = useState<'single' | 'group' | 'instant' | 'assets'>('single')
 
   // Hierarchy selection for creating categories
   const [selectedSubject, setSelectedSubject] = useState('')
@@ -75,6 +92,18 @@ export function QuestionBankManager({ courseId }: QuestionBankManagerProps) {
 
   const [categories, setCategories] = useState<QuestionCategory[]>([])
   const [expandedCategories, setExpandedCategories] = useState<string[]>([])
+
+  // Asset Library
+  const [assets, setAssets] = useState<AssetLibraryItem[]>([])
+  const [assetTitle, setAssetTitle] = useState('')
+  const [assetType, setAssetType] = useState<'note' | 'quiz' | 'link'>('note')
+  const [assetUrl, setAssetUrl] = useState('')
+  const [assetDescription, setAssetDescription] = useState('')
+  const [assetSubtopic, setAssetSubtopic] = useState('')
+  const [assetFilterSubject, setAssetFilterSubject] = useState<string>('')
+  const [assetFilterTopic, setAssetFilterTopic] = useState<string>('')
+  const [assetFilterType, setAssetFilterType] = useState<'all' | 'note' | 'quiz' | 'link'>('all')
+  const [assetSearch, setAssetSearch] = useState('')
 
   // Single question form
   const [qbQuestion, setQbQuestion] = useState('')
@@ -116,9 +145,61 @@ export function QuestionBankManager({ courseId }: QuestionBankManagerProps) {
   const [editCorrectIndex, setEditCorrectIndex] = useState(0)
   const [editCategory, setEditCategory] = useState('')
 
+  // Load categories and assets on mount
+  useEffect(() => {
+    const loadCategories = async () => {
+      try {
+        const catQuery = query(
+          collection(db, 'coaching-categories'),
+          where('courseId', '==', courseId || 'global')
+        )
+        const snapshot = await getDocs(catQuery)
+        const loaded = snapshot.docs.map(doc => doc.data() as QuestionCategory)
+        if (loaded.length) {
+          setCategories(loaded.sort((a, b) => b.createdAt - a.createdAt))
+        }
+      } catch (error) {
+        console.error('Error loading categories', error)
+      }
+    }
+
+    const loadAssets = async () => {
+      try {
+        const assetQuery = query(
+          collection(db, 'coaching-assets'),
+          where('courseId', '==', courseId || 'global')
+        )
+        const snapshot = await getDocs(assetQuery)
+        const loaded = snapshot.docs.map(doc => doc.data() as AssetLibraryItem)
+        if (loaded.length) {
+          setAssets(loaded.sort((a, b) => b.createdAt - a.createdAt))
+        }
+      } catch (error) {
+        console.error('Error loading assets', error)
+      }
+    }
+
+    loadCategories()
+    loadAssets()
+  }, [courseId])
+
   const topicOptions = useMemo(() => {
     return selectedSubject ? libraryTopics.filter(t => t.subjectId === selectedSubject && t.isActive) : []
   }, [selectedSubject, libraryTopics])
+
+  const assetTopicOptions = useMemo(() => {
+    return assetFilterSubject ? libraryTopics.filter(t => t.subjectId === assetFilterSubject && t.isActive) : libraryTopics.filter(t => t.isActive)
+  }, [assetFilterSubject, libraryTopics])
+
+  const filteredAssets = useMemo(() => {
+    return assets.filter(asset => {
+      if (assetFilterSubject && asset.subjectId !== assetFilterSubject) return false
+      if (assetFilterTopic && asset.topicId !== assetFilterTopic) return false
+      if (assetFilterType !== 'all' && asset.type !== assetFilterType) return false
+      if (assetSearch && !asset.title.toLowerCase().includes(assetSearch.toLowerCase())) return false
+      return true
+    })
+  }, [assets, assetFilterSubject, assetFilterTopic, assetFilterType, assetSearch])
 
   const categoryLabel = (cat: QuestionCategory) => {
     const subject = librarySubjects.find(s => s.id === cat.subjectId)
@@ -511,6 +592,61 @@ export function QuestionBankManager({ courseId }: QuestionBankManagerProps) {
     setEditingQuestion(null)
   }
 
+  const handleAddAsset = async () => {
+    if (!selectedSubject || !selectedTopic) {
+      alert('Select Subject and Topic first')
+      return
+    }
+    if (!assetTitle.trim()) {
+      alert('Enter asset title')
+      return
+    }
+    if (assetType === 'link' && !assetUrl.trim()) {
+      alert('Add a link URL for this asset')
+      return
+    }
+
+    const asset: AssetLibraryItem = {
+      id: uuidv4(),
+      title: assetTitle.trim(),
+      type: assetType,
+      url: assetUrl.trim() || undefined,
+      description: assetDescription.trim() || undefined,
+      subjectId: selectedSubject,
+      topicId: selectedTopic,
+      subtopic: assetSubtopic.trim() || undefined,
+      createdAt: Date.now(),
+      createdBy: user?.id,
+      createdByName: user?.displayName,
+    }
+
+    setAssets(prev => [asset, ...prev])
+    setAssetTitle('')
+    setAssetUrl('')
+    setAssetDescription('')
+    setAssetSubtopic('')
+
+    try {
+      await setDoc(doc(db, 'coaching-assets', asset.id), {
+        ...asset,
+        courseId: courseId || 'global',
+        userId: user?.id,
+      })
+    } catch (err) {
+      console.error('Error saving asset:', err)
+    }
+  }
+
+  const handleDeleteAsset = async (id: string) => {
+    if (!confirm('Delete this asset?')) return
+    setAssets(prev => prev.filter(a => a.id !== id))
+    try {
+      await setDoc(doc(db, 'coaching-assets', id), { deleted: true }, { merge: true })
+    } catch (err) {
+      console.error('Error deleting asset:', err)
+    }
+  }
+
   const handleDeleteQuestion = async (id: string) => {
     if (!confirm('Delete this question?')) return
     removeMCQ(id)
@@ -575,7 +711,7 @@ export function QuestionBankManager({ courseId }: QuestionBankManagerProps) {
 
       {/* Tabs */}
       <div className="flex gap-1 p-1 bg-muted rounded-lg">
-        {['single','group','instant'].map(tab => (
+        {['single','group','instant','assets'].map(tab => (
           <button
             key={tab}
             onClick={() => setQuestionBankTab(tab as any)}
@@ -584,6 +720,7 @@ export function QuestionBankManager({ courseId }: QuestionBankManagerProps) {
             {tab === 'single' && '✏️ Single'}
             {tab === 'group' && '📋 Group'}
             {tab === 'instant' && '⚡ Instant'}
+            {tab === 'assets' && '📚 Assets'}
           </button>
         ))}
       </div>
@@ -833,6 +970,109 @@ export function QuestionBankManager({ courseId }: QuestionBankManagerProps) {
               </Button>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Assets */}
+      {questionBankTab === 'assets' && (
+        <div className="space-y-4 p-3 border rounded-lg bg-muted/30">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <BookOpen className="h-5 w-5 text-indigo-500" />
+              <div>
+                <p className="text-sm font-semibold">Asset Library</p>
+                <p className="text-xs text-muted-foreground">Store Notes, Quizzes, Links by Subject &gt; Topic &gt; Subtopic</p>
+              </div>
+            </div>
+            <div className="text-xs text-muted-foreground">{assets.length} items</div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+            <Select value={assetFilterSubject} onValueChange={v => { setAssetFilterSubject(v); setAssetFilterTopic('') }}>
+              <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="Filter by Subject" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">All Subjects</SelectItem>
+                {librarySubjects.map(s => (
+                  <SelectItem key={s.id} value={s.id}>{s.icon} {s.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={assetFilterTopic} onValueChange={setAssetFilterTopic} disabled={!assetFilterSubject}>
+              <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="Filter by Topic" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">All Topics</SelectItem>
+                {assetTopicOptions.map(t => (
+                  <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={assetFilterType} onValueChange={v => setAssetFilterType(v as any)}>
+              <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="Filter by Type" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Types</SelectItem>
+                <SelectItem value="note">Notes</SelectItem>
+                <SelectItem value="quiz">Quiz</SelectItem>
+                <SelectItem value="link">Link</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <Input value={assetSearch} onChange={e => setAssetSearch(e.target.value)} placeholder="Search assets..." className="h-9 text-sm" />
+            <p className="text-[11px] text-muted-foreground flex items-center gap-1"><FolderPlus className="h-4 w-4" /> Use Subject/Topic selectors above to add a new asset.</p>
+          </div>
+
+          <div className="p-3 border rounded bg-background space-y-2">
+            <p className="text-sm font-medium flex items-center gap-2"><FolderPlus className="h-4 w-4" />Add Asset</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              <Input value={assetTitle} onChange={e => setAssetTitle(e.target.value)} placeholder="Title (e.g., Heredity Notes)" className="h-9 text-sm" />
+              <Select value={assetType} onValueChange={v => setAssetType(v as any)}>
+                <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="Type" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="note">Note</SelectItem>
+                  <SelectItem value="quiz">Quiz</SelectItem>
+                  <SelectItem value="link">Link</SelectItem>
+                </SelectContent>
+              </Select>
+              <Input value={assetSubtopic} onChange={e => setAssetSubtopic(e.target.value)} placeholder="Subtopic (optional)" className="h-9 text-sm" />
+              {assetType === 'link' && (
+                <Input value={assetUrl} onChange={e => setAssetUrl(e.target.value)} placeholder="Link URL" className="h-9 text-sm" />
+              )}
+            </div>
+            <Textarea value={assetDescription} onChange={e => setAssetDescription(e.target.value)} rows={2} className="text-sm" placeholder="Short description or note content" />
+            <div className="flex flex-wrap gap-2 items-center">
+              <Button size="sm" onClick={handleAddAsset}><Plus className="h-4 w-4 mr-1" /> Save Asset</Button>
+              <span className="text-[11px] text-muted-foreground">Make sure Subject &amp; Topic are selected in the top bar.</span>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            {filteredAssets.length === 0 ? (
+              <div className="text-center py-6 text-muted-foreground text-sm">No assets yet. Add one using the form above.</div>
+            ) : (
+              filteredAssets.map(asset => {
+                const subject = librarySubjects.find(s => s.id === asset.subjectId)
+                const topic = libraryTopics.find(t => t.id === asset.topicId)
+                const typeColor = asset.type === 'note' ? 'bg-indigo-100 text-indigo-700' : asset.type === 'quiz' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+                return (
+                  <div key={asset.id} className="p-3 border rounded-lg bg-white dark:bg-gray-900 shadow-sm">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className={`text-[10px] px-2 py-0.5 rounded ${typeColor} capitalize`}>{asset.type}</span>
+                          <p className="font-semibold text-sm truncate" title={asset.title}>{asset.title}</p>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground mt-1">{subject?.name} &gt; {topic?.name}{asset.subtopic ? ` • ${asset.subtopic}` : ''}</p>
+                        {asset.description && <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{asset.description}</p>}
+                        {asset.url && <a href={asset.url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline inline-flex items-center gap-1 mt-1"><Link2 className="h-3 w-3" />Open link</a>}
+                      </div>
+                      <Button variant="ghost" size="sm" onClick={() => handleDeleteAsset(asset.id)} className="h-7 w-7 p-0 text-red-500"><Trash2 className="h-3.5 w-3.5" /></Button>
+                    </div>
+                  </div>
+                )
+              })
+            )}
+          </div>
         </div>
       )}
 
