@@ -1,990 +1,495 @@
 import { useState, useEffect } from 'react';
-import { motion, AnimatePresence, Reorder } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
   Plus,
-  GripVertical,
-  Edit3,
-  Trash2,
   ChevronDown,
-  ChevronUp,
-  Video,
+  ChevronRight,
+  MoreVertical,
   FileText,
-  FileQuestion,
+  HelpCircle,
+  Video,
   Link2,
   Calendar,
-  Save,
+  File,
+  Pencil,
+  ArrowUp,
+  ArrowDown,
+  Trash2,
   X,
   Eye,
-  EyeOff,
-  Clock,
-  MoreVertical,
-  AlertCircle,
-  CheckCircle2,
-  Upload,
-  ExternalLink,
+  Save,
   Play,
-  BookOpen,
-  Youtube,
-  Code,
-  ImageIcon,
-  File,
+  ExternalLink,
+  CheckCircle2,
+  ArrowLeft,
 } from 'lucide-react';
-import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { useCoachingStore } from '@/stores/coaching-store';
 import ReactQuill from 'react-quill';
 import 'react-quill/dist/quill.snow.css';
-import type { CourseSection, CourseLesson, CourseMCQ } from '@/types';
+import type { InlineSection, InlineLesson, InlineMCQ } from '@/types';
 
 interface CourseContentManagerProps {
   courseId: string;
   onBack: () => void;
 }
 
-type LessonType = 'video' | 'note' | 'quiz' | 'link' | 'live-class' | 'pdf';
+type ContentType = 'video' | 'note' | 'quiz' | 'pdf' | 'link' | 'live-class';
 
-const LESSON_TYPES: { type: LessonType; label: string; icon: any; color: string }[] = [
-  { type: 'video', label: 'Video', icon: Video, color: 'blue' },
-  { type: 'note', label: 'Notes', icon: FileText, color: 'emerald' },
-  { type: 'quiz', label: 'Quiz', icon: FileQuestion, color: 'amber' },
+const CONTENT_TYPES: { type: ContentType; label: string; icon: React.ComponentType<{ className?: string }>; color: string }[] = [
+  { type: 'note', label: 'Notes', icon: FileText, color: 'blue' },
+  { type: 'quiz', label: 'Quiz', icon: HelpCircle, color: 'green' },
+  { type: 'video', label: 'Video', icon: Video, color: 'purple' },
+  { type: 'link', label: 'External Link', icon: Link2, color: 'orange' },
   { type: 'pdf', label: 'PDF', icon: File, color: 'red' },
-  { type: 'link', label: 'Link', icon: Link2, color: 'purple' },
-  { type: 'live-class', label: 'Live Class', icon: Calendar, color: 'rose' },
+  { type: 'live-class', label: 'Live Class', icon: Calendar, color: 'pink' },
 ];
 
-// Rich Text Editor modules
 const quillModules = {
   toolbar: [
-    [{ 'header': [1, 2, 3, false] }],
+    [{ header: [1, 2, 3, false] }],
     ['bold', 'italic', 'underline', 'strike'],
-    [{ 'list': 'ordered'}, { 'list': 'bullet' }],
-    [{ 'align': [] }],
-    [{ 'color': [] }, { 'background': [] }],
-    ['link', 'image', 'video'],
-    ['clean']
+    [{ list: 'ordered' }, { list: 'bullet' }],
+    [{ color: [] }, { background: [] }],
+    ['link', 'image'],
+    ['clean'],
   ],
 };
 
 export function CourseContentManager({ courseId, onBack }: CourseContentManagerProps) {
-  const {
-    courses,
-    sections,
-    lessons,
-    addSection,
-    updateSection,
-    removeSection,
-    reorderSections,
-    addLesson,
-    updateLesson,
-    removeLesson,
-    reorderLessons,
-    getSectionsByCourse,
-    getLessonsBySection,
-  } = useCoachingStore();
-
-  // Get course and its content
+  const { courses, updateCourse } = useCoachingStore();
   const course = courses.find((c) => c.id === courseId);
-  const courseSections = getSectionsByCourse(courseId).sort((a, b) => a.order - b.order);
 
-  // UI State
-  const [expandedSections, setExpandedSections] = useState<string[]>([]);
-  const [editingSection, setEditingSection] = useState<string | null>(null);
-  const [editingLesson, setEditingLesson] = useState<string | null>(null);
-  const [showNewSectionForm, setShowNewSectionForm] = useState(false);
-  const [showNewLessonForm, setShowNewLessonForm] = useState<string | null>(null);
-  const [viewingLesson, setViewingLesson] = useState<CourseLesson | null>(null);
-
-  // Form State
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
+  
+  const [showAddSection, setShowAddSection] = useState(false);
   const [newSectionTitle, setNewSectionTitle] = useState('');
-  const [newSectionDescription, setNewSectionDescription] = useState('');
-  const [newLessonTitle, setNewLessonTitle] = useState('');
-  const [newLessonType, setNewLessonType] = useState<LessonType>('video');
-  const [newLessonContent, setNewLessonContent] = useState('');
-  const [newLessonDuration, setNewLessonDuration] = useState('');
-  const [newLessonPreviewable, setNewLessonPreviewable] = useState(false);
-
-  // Quiz Form State
-  const [quizQuestions, setQuizQuestions] = useState<CourseMCQ[]>([]);
-  const [currentQuestion, setCurrentQuestion] = useState('');
-  const [currentOptions, setCurrentOptions] = useState(['', '', '', '']);
-  const [currentCorrect, setCurrentCorrect] = useState(0);
-  const [quizTimeLimit, setQuizTimeLimit] = useState('');
-  const [quizPassingScore, setQuizPassingScore] = useState('60');
-
-  // Edit Lesson State
+  
+  const [addingToSection, setAddingToSection] = useState<string | null>(null);
+  const [addContentType, setAddContentType] = useState<ContentType | null>(null);
+  const [newContentTitle, setNewContentTitle] = useState('');
+  const [newContentData, setNewContentData] = useState('');
+  
+  const [quizQuestions, setQuizQuestions] = useState<InlineMCQ[]>([]);
+  const [newQuestion, setNewQuestion] = useState('');
+  const [newOptions, setNewOptions] = useState(['', '', '', '']);
+  const [correctIndex, setCorrectIndex] = useState(0);
+  
+  const [editingLesson, setEditingLesson] = useState<InlineLesson | null>(null);
   const [editLessonTitle, setEditLessonTitle] = useState('');
   const [editLessonContent, setEditLessonContent] = useState('');
-  const [editLessonDuration, setEditLessonDuration] = useState('');
-  const [editLessonPreviewable, setEditLessonPreviewable] = useState(false);
-  const [editQuizQuestions, setEditQuizQuestions] = useState<CourseMCQ[]>([]);
+  
+  const [viewingLesson, setViewingLesson] = useState<InlineLesson | null>(null);
+  
+  const [renamingSection, setRenamingSection] = useState<string | null>(null);
+  const [renameSectionTitle, setRenameSectionTitle] = useState('');
+  const [renamingLesson, setRenamingLesson] = useState<string | null>(null);
+  const [renameLessonTitle, setRenameLessonTitle] = useState('');
 
-  // Toggle section expansion
-  const toggleSection = (sectionId: string) => {
-    setExpandedSections((prev) =>
-      prev.includes(sectionId)
-        ? prev.filter((id) => id !== sectionId)
-        : [...prev, sectionId]
-    );
-  };
-
-  // Create new section
-  const handleCreateSection = () => {
-    if (!newSectionTitle.trim()) return;
-
-    const newSection: CourseSection = {
-      id: `section_${Date.now()}`,
-      courseId,
-      title: newSectionTitle.trim(),
-      description: newSectionDescription.trim() || undefined,
-      order: courseSections.length,
-      isPublished: true,
-      createdAt: Date.now(),
-    };
-
-    addSection(newSection);
-    setNewSectionTitle('');
-    setNewSectionDescription('');
-    setShowNewSectionForm(false);
-    setExpandedSections([...expandedSections, newSection.id]);
-  };
-
-  // Update section
-  const handleUpdateSection = (section: CourseSection, title: string, description?: string) => {
-    updateSection({
-      ...section,
-      title,
-      description,
-    });
-    setEditingSection(null);
-  };
-
-  // Delete section
-  const handleDeleteSection = (sectionId: string) => {
-    if (confirm('Delete this section and all its lessons?')) {
-      removeSection(sectionId);
+  useEffect(() => {
+    if (course?.sections) {
+      setExpandedSections(new Set(course.sections.map((s) => s.id)));
     }
-  };
-
-  // Create new lesson
-  const handleCreateLesson = (sectionId: string) => {
-    if (!newLessonTitle.trim()) return;
-
-    const sectionLessons = getLessonsBySection(sectionId);
-
-    // For quiz type, save questions in content as JSON
-    let content = newLessonContent.trim();
-    if (newLessonType === 'quiz' && quizQuestions.length > 0) {
-      content = JSON.stringify({
-        questions: quizQuestions,
-        timeLimit: quizTimeLimit ? parseInt(quizTimeLimit) : null,
-        passingScore: parseInt(quizPassingScore) || 60,
-      });
-    }
-
-    const newLesson: CourseLesson = {
-      id: `lesson_${Date.now()}`,
-      courseId,
-      sectionId,
-      title: newLessonTitle.trim(),
-      type: newLessonType,
-      content,
-      duration: newLessonDuration ? parseInt(newLessonDuration) : undefined,
-      isPreviewable: newLessonPreviewable,
-      isPublished: true,
-      order: sectionLessons.length,
-      quizQuestions: newLessonType === 'quiz' ? quizQuestions : undefined,
-      quizTimeLimit: newLessonType === 'quiz' && quizTimeLimit ? parseInt(quizTimeLimit) : undefined,
-      quizPassingScore: newLessonType === 'quiz' ? parseInt(quizPassingScore) || 60 : undefined,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
-
-    addLesson(newLesson);
-    resetLessonForm();
-    setShowNewLessonForm(null);
-  };
-
-  // Add question to quiz
-  const handleAddQuestion = () => {
-    if (!currentQuestion.trim() || currentOptions.some(o => !o.trim())) return;
-    
-    const newQuestion: CourseMCQ = {
-      id: `mcq_${Date.now()}`,
-      courseId,
-      question: currentQuestion.trim(),
-      options: currentOptions.map(o => o.trim()),
-      correctIndex: currentCorrect,
-      marks: 1,
-      negativeMarks: 0,
-      difficulty: 'medium',
-      order: quizQuestions.length,
-    };
-    
-    setQuizQuestions([...quizQuestions, newQuestion]);
-    setCurrentQuestion('');
-    setCurrentOptions(['', '', '', '']);
-    setCurrentCorrect(0);
-  };
-
-  // Remove question from quiz
-  const handleRemoveQuestion = (questionId: string) => {
-    setQuizQuestions(quizQuestions.filter(q => q.id !== questionId));
-  };
-
-  // Reset lesson form
-  const resetLessonForm = () => {
-    setNewLessonTitle('');
-    setNewLessonType('video');
-    setNewLessonContent('');
-    setNewLessonDuration('');
-    setNewLessonPreviewable(false);
-    setQuizQuestions([]);
-    setCurrentQuestion('');
-    setCurrentOptions(['', '', '', '']);
-    setCurrentCorrect(0);
-    setQuizTimeLimit('');
-    setQuizPassingScore('60');
-  };
-
-  // Start editing a lesson
-  const handleStartEditLesson = (lesson: CourseLesson) => {
-    setEditingLesson(lesson.id);
-    setEditLessonTitle(lesson.title);
-    setEditLessonContent(lesson.content);
-    setEditLessonDuration(lesson.duration?.toString() || '');
-    setEditLessonPreviewable(lesson.isPreviewable);
-    if (lesson.type === 'quiz' && lesson.quizQuestions) {
-      setEditQuizQuestions(lesson.quizQuestions);
-    }
-  };
-
-  // Save edited lesson
-  const handleSaveEditLesson = (lesson: CourseLesson) => {
-    let content = editLessonContent;
-    if (lesson.type === 'quiz' && editQuizQuestions.length > 0) {
-      content = JSON.stringify({
-        questions: editQuizQuestions,
-        timeLimit: lesson.quizTimeLimit,
-        passingScore: lesson.quizPassingScore || 60,
-      });
-    }
-
-    updateLesson({
-      ...lesson,
-      title: editLessonTitle,
-      content,
-      duration: editLessonDuration ? parseInt(editLessonDuration) : undefined,
-      isPreviewable: editLessonPreviewable,
-      quizQuestions: lesson.type === 'quiz' ? editQuizQuestions : undefined,
-      updatedAt: Date.now(),
-    });
-    setEditingLesson(null);
-  };
-
-  // Convert YouTube URL to embed URL
-  const getYouTubeEmbedUrl = (url: string): string | null => {
-    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
-    const match = url.match(regExp);
-    if (match && match[2].length === 11) {
-      return `https://www.youtube.com/embed/${match[2]}`;
-    }
-    return null;
-  };
-
-  // Delete lesson
-  const handleDeleteLesson = (lessonId: string) => {
-    if (confirm('Delete this lesson?')) {
-      removeLesson(lessonId);
-    }
-  };
-
-  // Toggle lesson preview
-  const toggleLessonPreview = (lesson: CourseLesson) => {
-    updateLesson({
-      ...lesson,
-      isPreviewable: !lesson.isPreviewable,
-      updatedAt: Date.now(),
-    });
-  };
-
-  // Get lesson icon
-  const getLessonIcon = (type: LessonType) => {
-    return LESSON_TYPES.find((t) => t.type === type)?.icon || FileText;
-  };
-
-  // Get lesson color
-  const getLessonColor = (type: LessonType) => {
-    return LESSON_TYPES.find((t) => t.type === type)?.color || 'gray';
-  };
+  }, [course?.id, course?.sections]);
 
   if (!course) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="p-6 text-center">
         <p className="text-gray-500">Course not found</p>
+        <Button onClick={onBack} className="mt-4">Go Back</Button>
       </div>
     );
   }
 
+  const sections: InlineSection[] = course.sections || [];
+
+  const toggleSection = (sectionId: string) => {
+    setExpandedSections((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(sectionId)) {
+        newSet.delete(sectionId);
+      } else {
+        newSet.add(sectionId);
+      }
+      return newSet;
+    });
+  };
+
+  const handleAddSection = () => {
+    if (!newSectionTitle.trim()) return;
+    const newSection: InlineSection = {
+      id: `section-${Date.now()}`,
+      title: newSectionTitle.trim(),
+      lessons: [],
+      order: sections.length,
+    };
+    updateCourse({ ...course, sections: [...sections, newSection] });
+    setNewSectionTitle('');
+    setShowAddSection(false);
+    setExpandedSections((prev) => new Set([...prev, newSection.id]));
+  };
+
+  const handleAddContent = () => {
+    if (!addingToSection || !addContentType || !newContentTitle.trim()) return;
+    const newLesson: InlineLesson = {
+      id: `lesson-${Date.now()}`,
+      title: newContentTitle.trim(),
+      type: addContentType,
+      content: addContentType === 'quiz' ? '' : newContentData,
+      quizQuestions: addContentType === 'quiz' ? quizQuestions : undefined,
+      duration: 0,
+      order: sections.find((s) => s.id === addingToSection)?.lessons.length || 0,
+    };
+    const updatedSections = sections.map((section) => {
+      if (section.id === addingToSection) {
+        return { ...section, lessons: [...section.lessons, newLesson] };
+      }
+      return section;
+    });
+    updateCourse({ ...course, sections: updatedSections });
+    setAddingToSection(null);
+    setAddContentType(null);
+    setNewContentTitle('');
+    setNewContentData('');
+    setQuizQuestions([]);
+  };
+
+  const handleAddQuizQuestion = () => {
+    if (!newQuestion.trim() || newOptions.some((o) => !o.trim())) return;
+    const question: InlineMCQ = {
+      id: `q-${Date.now()}`,
+      question: newQuestion.trim(),
+      options: newOptions.map((o) => o.trim()),
+      correctIndex,
+    };
+    setQuizQuestions([...quizQuestions, question]);
+    setNewQuestion('');
+    setNewOptions(['', '', '', '']);
+    setCorrectIndex(0);
+  };
+
+  const handleDeleteSection = (sectionId: string) => {
+    const updatedSections = sections.filter((s) => s.id !== sectionId);
+    updateCourse({ ...course, sections: updatedSections });
+  };
+
+  const handleRenameSection = (sectionId: string) => {
+    if (!renameSectionTitle.trim()) return;
+    const updatedSections = sections.map((s) =>
+      s.id === sectionId ? { ...s, title: renameSectionTitle.trim() } : s
+    );
+    updateCourse({ ...course, sections: updatedSections });
+    setRenamingSection(null);
+    setRenameSectionTitle('');
+  };
+
+  const handleDeleteLesson = (sectionId: string, lessonId: string) => {
+    const updatedSections = sections.map((section) => {
+      if (section.id === sectionId) {
+        return { ...section, lessons: section.lessons.filter((l) => l.id !== lessonId) };
+      }
+      return section;
+    });
+    updateCourse({ ...course, sections: updatedSections });
+  };
+
+  const handleRenameLesson = (sectionId: string, lessonId: string) => {
+    if (!renameLessonTitle.trim()) return;
+    const updatedSections = sections.map((section) => {
+      if (section.id === sectionId) {
+        return {
+          ...section,
+          lessons: section.lessons.map((l) =>
+            l.id === lessonId ? { ...l, title: renameLessonTitle.trim() } : l
+          ),
+        };
+      }
+      return section;
+    });
+    updateCourse({ ...course, sections: updatedSections });
+    setRenamingLesson(null);
+    setRenameLessonTitle('');
+  };
+
+  const moveLessonUp = (sectionId: string, lessonIndex: number) => {
+    if (lessonIndex === 0) return;
+    const updatedSections = sections.map((section) => {
+      if (section.id === sectionId) {
+        const newLessons = [...section.lessons];
+        [newLessons[lessonIndex - 1], newLessons[lessonIndex]] = [newLessons[lessonIndex], newLessons[lessonIndex - 1]];
+        return { ...section, lessons: newLessons };
+      }
+      return section;
+    });
+    updateCourse({ ...course, sections: updatedSections });
+  };
+
+  const moveLessonDown = (sectionId: string, lessonIndex: number, totalLessons: number) => {
+    if (lessonIndex >= totalLessons - 1) return;
+    const updatedSections = sections.map((section) => {
+      if (section.id === sectionId) {
+        const newLessons = [...section.lessons];
+        [newLessons[lessonIndex], newLessons[lessonIndex + 1]] = [newLessons[lessonIndex + 1], newLessons[lessonIndex]];
+        return { ...section, lessons: newLessons };
+      }
+      return section;
+    });
+    updateCourse({ ...course, sections: updatedSections });
+  };
+
+  const handleSaveEditLesson = (sectionId: string) => {
+    if (!editingLesson) return;
+    const updatedSections = sections.map((section) => {
+      if (section.id === sectionId) {
+        return {
+          ...section,
+          lessons: section.lessons.map((l) =>
+            l.id === editingLesson.id ? { ...l, title: editLessonTitle, content: editLessonContent } : l
+          ),
+        };
+      }
+      return section;
+    });
+    updateCourse({ ...course, sections: updatedSections });
+    setEditingLesson(null);
+  };
+
+  const getContentIcon = (type: ContentType) => {
+    switch (type) {
+      case 'note': return <FileText className="w-4 h-4" />;
+      case 'quiz': return <HelpCircle className="w-4 h-4" />;
+      case 'video': return <Video className="w-4 h-4" />;
+      case 'link': return <Link2 className="w-4 h-4" />;
+      case 'pdf': return <File className="w-4 h-4" />;
+      case 'live-class': return <Calendar className="w-4 h-4" />;
+      default: return <FileText className="w-4 h-4" />;
+    }
+  };
+
+  const getContentColor = (type: ContentType) => {
+    switch (type) {
+      case 'note': return 'text-blue-500 bg-blue-100 dark:bg-blue-900/30';
+      case 'quiz': return 'text-green-500 bg-green-100 dark:bg-green-900/30';
+      case 'video': return 'text-purple-500 bg-purple-100 dark:bg-purple-900/30';
+      case 'link': return 'text-orange-500 bg-orange-100 dark:bg-orange-900/30';
+      case 'pdf': return 'text-red-500 bg-red-100 dark:bg-red-900/30';
+      case 'live-class': return 'text-pink-500 bg-pink-100 dark:bg-pink-900/30';
+      default: return 'text-gray-500 bg-gray-100 dark:bg-gray-900/30';
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-950">
-      {/* Header */}
-      <div className="bg-white dark:bg-gray-900 border-b dark:border-gray-800 sticky top-0 z-40">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 py-4">
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800">
+      <div className="sticky top-0 z-10 bg-white/80 dark:bg-gray-900/80 backdrop-blur-lg border-b dark:border-gray-800">
+        <div className="max-w-5xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <Button variant="outline" size="sm" onClick={onBack}>
-                ← Back
+            <div className="flex items-center gap-3">
+              <Button variant="ghost" size="icon" onClick={onBack}>
+                <ArrowLeft className="w-5 h-5" />
               </Button>
               <div>
-                <h1 className="text-lg font-semibold text-gray-900 dark:text-white">
-                  Course Content
-                </h1>
-                <p className="text-sm text-gray-500">{course.title}</p>
+                <h1 className="text-xl font-bold text-gray-900 dark:text-white">{course.title}</h1>
+                <p className="text-sm text-gray-500">Course Content Manager</p>
               </div>
             </div>
-            <div className="flex items-center gap-2 text-sm text-gray-500">
-              <span>{courseSections.length} sections</span>
-              <span>•</span>
-              <span>
-                {courseSections.reduce(
-                  (acc, s) => acc + getLessonsBySection(s.id).length,
-                  0
-                )}{' '}
-                lessons
-              </span>
+            <div className="flex items-center gap-3">
+              <span className={`text-sm font-medium ${!isEditMode ? 'text-blue-600' : 'text-gray-400'}`}>Display</span>
+              <Switch checked={isEditMode} onCheckedChange={setIsEditMode} />
+              <span className={`text-sm font-medium ${isEditMode ? 'text-orange-600' : 'text-gray-400'}`}>Edit Mode</span>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Content */}
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6">
-        <motion.div layout className="space-y-4">
-          {/* Sections */}
-          {courseSections.map((section, sectionIndex) => {
-            const sectionLessons = getLessonsBySection(section.id).sort(
-              (a, b) => a.order - b.order
-            );
-            const isExpanded = expandedSections.includes(section.id);
-            const isEditing = editingSection === section.id;
-
-            return (
-              <motion.div
-                key={section.id}
-                layout
-                className="bg-white dark:bg-gray-900 rounded-xl border dark:border-gray-800 overflow-hidden"
-              >
-                {/* Section Header */}
-                <div className="p-4 flex items-center gap-3 bg-gray-50 dark:bg-gray-800/50">
-                  <div className="cursor-grab">
-                    <GripVertical className="w-5 h-5 text-gray-400" />
-                  </div>
-
-                  <span className="w-8 h-8 rounded-lg bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 font-semibold text-sm flex items-center justify-center">
-                    {sectionIndex + 1}
-                  </span>
-
-                  {isEditing ? (
-                    <div className="flex-1 flex items-center gap-2">
-                      <Input
-                        value={section.title}
-                        onChange={(e) =>
-                          updateSection({ ...section, title: e.target.value })
-                        }
-                        className="flex-1"
-                        autoFocus
-                      />
-                      <Button size="sm" onClick={() => setEditingSection(null)}>
-                        <CheckCircle2 className="w-4 h-4" />
-                      </Button>
+      <div className="max-w-5xl mx-auto px-4 py-6">
+        <div className="space-y-4">
+          {sections.map((section) => (
+            <div key={section.id} className="bg-white dark:bg-gray-800 rounded-xl border dark:border-gray-700 overflow-hidden shadow-sm">
+              <div className={`flex items-center justify-between px-4 py-3 ${isEditMode ? 'bg-orange-50 dark:bg-orange-900/20' : 'bg-gray-50 dark:bg-gray-900/50'}`}>
+                <div className="flex items-center gap-3 flex-1">
+                  <button onClick={() => toggleSection(section.id)} className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded">
+                    {expandedSections.has(section.id) ? <ChevronDown className="w-5 h-5" /> : <ChevronRight className="w-5 h-5" />}
+                  </button>
+                  {renamingSection === section.id ? (
+                    <div className="flex items-center gap-2 flex-1">
+                      <Input value={renameSectionTitle} onChange={(e) => setRenameSectionTitle(e.target.value)} className="h-8" autoFocus onKeyDown={(e) => { if (e.key === 'Enter') handleRenameSection(section.id); if (e.key === 'Escape') setRenamingSection(null); }} />
+                      <Button size="sm" onClick={() => handleRenameSection(section.id)}><Save className="w-4 h-4" /></Button>
+                      <Button size="sm" variant="ghost" onClick={() => setRenamingSection(null)}><X className="w-4 h-4" /></Button>
                     </div>
                   ) : (
-                    <div
-                      className="flex-1 cursor-pointer"
-                      onClick={() => toggleSection(section.id)}
-                    >
-                      <h3 className="font-medium text-gray-900 dark:text-white">
-                        {section.title}
-                      </h3>
-                      <p className="text-sm text-gray-500">
-                        {sectionLessons.length} lessons
-                      </p>
-                    </div>
+                    <h3 className="font-semibold text-gray-900 dark:text-white">{section.title}</h3>
                   )}
-
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => setEditingSection(section.id)}
-                      className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
-                    >
-                      <Edit3 className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => handleDeleteSection(section.id)}
-                      className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => toggleSection(section.id)}
-                      className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
-                    >
-                      {isExpanded ? (
-                        <ChevronUp className="w-5 h-5" />
-                      ) : (
-                        <ChevronDown className="w-5 h-5" />
+                  <span className="text-sm text-gray-500">({section.lessons.length} items)</span>
+                </div>
+                {isEditMode && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="icon" className="h-8 w-8"><MoreVertical className="w-4 h-4" /></Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={() => { setRenamingSection(section.id); setRenameSectionTitle(section.title); }}><Pencil className="w-4 h-4 mr-2" />Rename</DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => handleDeleteSection(section.id)} className="text-red-600"><Trash2 className="w-4 h-4 mr-2" />Delete Topic</DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+              </div>
+              <AnimatePresence>
+                {expandedSections.has(section.id) && (
+                  <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2 }} className="overflow-hidden">
+                    <div className="p-4 space-y-2">
+                      {section.lessons.length === 0 && !isEditMode && <p className="text-gray-400 text-sm text-center py-4">No content in this topic yet</p>}
+                      {section.lessons.map((lesson, lessonIndex) => (
+                        <div key={lesson.id} className={`flex items-center gap-3 p-3 rounded-lg border transition-all ${isEditMode ? 'bg-orange-50/50 dark:bg-orange-900/10 border-orange-200 dark:border-orange-800' : 'bg-gray-50 dark:bg-gray-900/50 border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-900'}`}>
+                          <div className={`p-2 rounded-lg ${getContentColor(lesson.type as ContentType)}`}>{getContentIcon(lesson.type as ContentType)}</div>
+                          {renamingLesson === lesson.id ? (
+                            <div className="flex items-center gap-2 flex-1">
+                              <Input value={renameLessonTitle} onChange={(e) => setRenameLessonTitle(e.target.value)} className="h-8" autoFocus onKeyDown={(e) => { if (e.key === 'Enter') handleRenameLesson(section.id, lesson.id); if (e.key === 'Escape') setRenamingLesson(null); }} />
+                              <Button size="sm" onClick={() => handleRenameLesson(section.id, lesson.id)}><Save className="w-4 h-4" /></Button>
+                            </div>
+                          ) : (
+                            <button onClick={() => !isEditMode && setViewingLesson(lesson)} className="flex-1 text-left">
+                              <span className="font-medium text-gray-900 dark:text-white">{lesson.title}</span>
+                              <span className="text-xs text-gray-500 ml-2 capitalize">({lesson.type})</span>
+                            </button>
+                          )}
+                          {isEditMode && (
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-8 w-8"><MoreVertical className="w-4 h-4" /></Button></DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuItem onClick={() => { setRenamingLesson(lesson.id); setRenameLessonTitle(lesson.title); }}><Pencil className="w-4 h-4 mr-2" />Rename</DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => { setEditingLesson(lesson); setEditLessonTitle(lesson.title); setEditLessonContent(lesson.content || ''); }}><FileText className="w-4 h-4 mr-2" />Edit content</DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => moveLessonUp(section.id, lessonIndex)} disabled={lessonIndex === 0}><ArrowUp className="w-4 h-4 mr-2" />Move up</DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => moveLessonDown(section.id, lessonIndex, section.lessons.length)} disabled={lessonIndex >= section.lessons.length - 1}><ArrowDown className="w-4 h-4 mr-2" />Move down</DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => handleDeleteLesson(section.id, lesson.id)} className="text-red-600"><Trash2 className="w-4 h-4 mr-2" />Delete</DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          )}
+                          {!isEditMode && <Button variant="ghost" size="sm" onClick={() => setViewingLesson(lesson)}><Eye className="w-4 h-4" /></Button>}
+                        </div>
+                      ))}
+                      {isEditMode && (
+                        <button onClick={() => setAddingToSection(section.id)} className="w-full flex items-center justify-center gap-2 p-3 rounded-lg border-2 border-dashed border-orange-300 dark:border-orange-700 text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors">
+                          <Plus className="w-4 h-4" />Add content
+                        </button>
                       )}
-                    </button>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          ))}
+
+          {isEditMode && (
+            <div className="mt-4">
+              {showAddSection ? (
+                <div className="bg-white dark:bg-gray-800 rounded-xl border dark:border-gray-700 p-4">
+                  <h4 className="font-medium mb-3">Add New Topic</h4>
+                  <div className="flex gap-2">
+                    <Input placeholder="Topic title..." value={newSectionTitle} onChange={(e) => setNewSectionTitle(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') handleAddSection(); if (e.key === 'Escape') setShowAddSection(false); }} autoFocus />
+                    <Button onClick={handleAddSection}><Save className="w-4 h-4 mr-2" />Add</Button>
+                    <Button variant="ghost" onClick={() => setShowAddSection(false)}><X className="w-4 h-4" /></Button>
                   </div>
                 </div>
-
-                {/* Lessons */}
-                <AnimatePresence>
-                  {isExpanded && (
-                    <motion.div
-                      initial={{ height: 0, opacity: 0 }}
-                      animate={{ height: 'auto', opacity: 1 }}
-                      exit={{ height: 0, opacity: 0 }}
-                      transition={{ duration: 0.2 }}
-                    >
-                      <div className="divide-y dark:divide-gray-800">
-                        {sectionLessons.map((lesson, lessonIndex) => {
-                          const LessonIcon = getLessonIcon(lesson.type);
-                          const lessonColor = getLessonColor(lesson.type);
-
-                          return (
-                            <div
-                              key={lesson.id}
-                              className="p-4 flex items-center gap-3 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors cursor-pointer"
-                              onClick={() => setViewingLesson(lesson)}
-                            >
-                              <div className="cursor-grab" onClick={(e) => e.stopPropagation()}>
-                                <GripVertical className="w-4 h-4 text-gray-300" />
-                              </div>
-
-                              <div
-                                className={`w-8 h-8 rounded-lg flex items-center justify-center bg-${lessonColor}-100 dark:bg-${lessonColor}-900/50 text-${lessonColor}-600`}
-                              >
-                                <LessonIcon className="w-4 h-4" />
-                              </div>
-
-                              <div className="flex-1 min-w-0">
-                                <p className="font-medium text-gray-900 dark:text-white text-sm truncate">
-                                  {lesson.title}
-                                </p>
-                                <div className="flex items-center gap-2 text-xs text-gray-500">
-                                  <span className="capitalize">{lesson.type}</span>
-                                  {lesson.duration && (
-                                    <>
-                                      <span>•</span>
-                                      <span>{lesson.duration} min</span>
-                                    </>
-                                  )}
-                                  {lesson.type === 'quiz' && lesson.quizQuestions && (
-                                    <>
-                                      <span>•</span>
-                                      <span>{lesson.quizQuestions.length} questions</span>
-                                    </>
-                                  )}
-                                </div>
-                              </div>
-
-                              <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                                {/* Preview Toggle */}
-                                <button
-                                  onClick={() => toggleLessonPreview(lesson)}
-                                  className={`p-2 rounded-lg transition-colors ${
-                                    lesson.isPreviewable
-                                      ? 'text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30'
-                                      : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-800'
-                                  }`}
-                                  title={
-                                    lesson.isPreviewable
-                                      ? 'Preview enabled'
-                                      : 'Enable preview'
-                                  }
-                                >
-                                  {lesson.isPreviewable ? (
-                                    <Eye className="w-4 h-4" />
-                                  ) : (
-                                    <EyeOff className="w-4 h-4" />
-                                  )}
-                                </button>
-
-                                <button
-                                  onClick={() => handleStartEditLesson(lesson)}
-                                  className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
-                                >
-                                  <Edit3 className="w-4 h-4" />
-                                </button>
-
-                                <button
-                                  onClick={() => handleDeleteLesson(lesson.id)}
-                                  className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              </div>
-                            </div>
-                          );
-                        })}
-
-                        {/* New Lesson Form */}
-                        {showNewLessonForm === section.id ? (
-                          <div className="p-4 bg-blue-50 dark:bg-blue-900/20 border-t dark:border-gray-800">
-                            <div className="space-y-4">
-                              <div className="flex items-center justify-between">
-                                <h4 className="font-medium text-gray-900 dark:text-white">
-                                  Add New Lesson
-                                </h4>
-                                <button
-                                  onClick={() => {
-                                    resetLessonForm();
-                                    setShowNewLessonForm(null);
-                                  }}
-                                  className="text-gray-400 hover:text-gray-600"
-                                >
-                                  <X className="w-5 h-5" />
-                                </button>
-                              </div>
-
-                              {/* Lesson Type Selection */}
-                              <div className="flex flex-wrap gap-2">
-                                {LESSON_TYPES.map((type) => (
-                                  <button
-                                    key={type.type}
-                                    onClick={() => setNewLessonType(type.type)}
-                                    className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
-                                      newLessonType === type.type
-                                        ? `bg-${type.color}-500 text-white`
-                                        : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 border dark:border-gray-700 hover:border-gray-400'
-                                    }`}
-                                  >
-                                    <type.icon className="w-4 h-4" />
-                                    {type.label}
-                                  </button>
-                                ))}
-                              </div>
-
-                              {/* Lesson Title */}
-                              <Input
-                                placeholder="Lesson title"
-                                value={newLessonTitle}
-                                onChange={(e) => setNewLessonTitle(e.target.value)}
-                              />
-
-                              {/* Content based on type */}
-                              {newLessonType === 'video' && (
-                                <div className="space-y-2">
-                                  <Input
-                                    placeholder="Video URL (YouTube, Vimeo, Google Drive, etc.)"
-                                    value={newLessonContent}
-                                    onChange={(e) => setNewLessonContent(e.target.value)}
-                                  />
-                                  {newLessonContent && getYouTubeEmbedUrl(newLessonContent) && (
-                                    <div className="aspect-video rounded-lg overflow-hidden bg-gray-100 dark:bg-gray-800">
-                                      <iframe
-                                        src={getYouTubeEmbedUrl(newLessonContent) || ''}
-                                        className="w-full h-full"
-                                        allowFullScreen
-                                      />
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-                              {newLessonType === 'note' && (
-                                <div className="bg-white dark:bg-gray-800 rounded-lg">
-                                  <ReactQuill
-                                    theme="snow"
-                                    value={newLessonContent}
-                                    onChange={setNewLessonContent}
-                                    modules={quillModules}
-                                    placeholder="Write your notes here..."
-                                    className="min-h-[200px]"
-                                  />
-                                </div>
-                              )}
-                              {newLessonType === 'pdf' && (
-                                <Input
-                                  placeholder="PDF URL (Google Drive, Dropbox, etc.)"
-                                  value={newLessonContent}
-                                  onChange={(e) => setNewLessonContent(e.target.value)}
-                                />
-                              )}
-                              {newLessonType === 'link' && (
-                                <Input
-                                  placeholder="External URL"
-                                  value={newLessonContent}
-                                  onChange={(e) => setNewLessonContent(e.target.value)}
-                                />
-                              )}
-                              {newLessonType === 'live-class' && (
-                                <div className="space-y-3">
-                                  <Input
-                                    placeholder="Meeting Link (Zoom, Google Meet, etc.)"
-                                    value={newLessonContent}
-                                    onChange={(e) => setNewLessonContent(e.target.value)}
-                                  />
-                                </div>
-                              )}
-                              {newLessonType === 'quiz' && (
-                                <div className="space-y-4 bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700">
-                                  <div className="flex items-center justify-between">
-                                    <h5 className="font-medium text-gray-900 dark:text-white">Quiz Questions ({quizQuestions.length})</h5>
-                                    <div className="flex gap-2">
-                                      <Input
-                                        type="number"
-                                        placeholder="Time (min)"
-                                        value={quizTimeLimit}
-                                        onChange={(e) => setQuizTimeLimit(e.target.value)}
-                                        className="w-24"
-                                      />
-                                      <Input
-                                        type="number"
-                                        placeholder="Pass %"
-                                        value={quizPassingScore}
-                                        onChange={(e) => setQuizPassingScore(e.target.value)}
-                                        className="w-20"
-                                      />
-                                    </div>
-                                  </div>
-                                  
-                                  {/* Existing Questions */}
-                                  {quizQuestions.map((q, idx) => (
-                                    <div key={q.id} className="p-3 bg-gray-50 dark:bg-gray-900 rounded-lg">
-                                      <div className="flex items-start justify-between gap-2">
-                                        <div className="flex-1">
-                                          <p className="font-medium text-sm">{idx + 1}. {q.question}</p>
-                                          <div className="grid grid-cols-2 gap-1 mt-2">
-                                            {q.options.map((opt, oi) => (
-                                              <span key={oi} className={`text-xs px-2 py-1 rounded ${oi === q.correctIndex ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-400' : 'bg-gray-100 dark:bg-gray-800'}`}>
-                                                {String.fromCharCode(65 + oi)}. {opt}
-                                              </span>
-                                            ))}
-                                          </div>
-                                        </div>
-                                        <button onClick={() => handleRemoveQuestion(q.id)} className="text-red-500 hover:text-red-700">
-                                          <Trash2 className="w-4 h-4" />
-                                        </button>
-                                      </div>
-                                    </div>
-                                  ))}
-
-                                  {/* Add New Question */}
-                                  <div className="border-t dark:border-gray-700 pt-4 space-y-3">
-                                    <Textarea
-                                      placeholder="Enter question..."
-                                      value={currentQuestion}
-                                      onChange={(e) => setCurrentQuestion(e.target.value)}
-                                      rows={2}
-                                    />
-                                    <div className="grid grid-cols-2 gap-2">
-                                      {currentOptions.map((opt, idx) => (
-                                        <div key={idx} className="flex items-center gap-2">
-                                          <button
-                                            onClick={() => setCurrentCorrect(idx)}
-                                            className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold transition-all ${
-                                              currentCorrect === idx 
-                                                ? 'bg-emerald-500 text-white' 
-                                                : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
-                                            }`}
-                                          >
-                                            {String.fromCharCode(65 + idx)}
-                                          </button>
-                                          <Input
-                                            placeholder={`Option ${String.fromCharCode(65 + idx)}`}
-                                            value={opt}
-                                            onChange={(e) => {
-                                              const newOpts = [...currentOptions];
-                                              newOpts[idx] = e.target.value;
-                                              setCurrentOptions(newOpts);
-                                            }}
-                                            className="flex-1"
-                                          />
-                                        </div>
-                                      ))}
-                                    </div>
-                                    <Button size="sm" onClick={handleAddQuestion} disabled={!currentQuestion.trim() || currentOptions.some(o => !o.trim())}>
-                                      <Plus className="w-4 h-4 mr-1" /> Add Question
-                                    </Button>
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* Duration & Preview */}
-                              <div className="flex items-center gap-4">
-                                <div className="flex-1">
-                                  <label className="text-sm text-gray-500 mb-1 block">
-                                    Duration (minutes)
-                                  </label>
-                                  <Input
-                                    type="number"
-                                    placeholder="e.g., 15"
-                                    value={newLessonDuration}
-                                    onChange={(e) => setNewLessonDuration(e.target.value)}
-                                  />
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <Switch
-                                    checked={newLessonPreviewable}
-                                    onCheckedChange={setNewLessonPreviewable}
-                                  />
-                                  <span className="text-sm text-gray-600 dark:text-gray-400">
-                                    Free Preview
-                                  </span>
-                                </div>
-                              </div>
-
-                              <div className="flex justify-end gap-2">
-                                <Button
-                                  variant="outline"
-                                  onClick={() => {
-                                    resetLessonForm();
-                                    setShowNewLessonForm(null);
-                                  }}
-                                >
-                                  Cancel
-                                </Button>
-                                <Button onClick={() => handleCreateLesson(section.id)}>
-                                  <Plus className="w-4 h-4 mr-1" />
-                                  Add Lesson
-                                </Button>
-                              </div>
-                            </div>
-                          </div>
-                        ) : (
-                          <button
-                            onClick={() => setShowNewLessonForm(section.id)}
-                            className="w-full p-4 flex items-center justify-center gap-2 text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors text-sm font-medium"
-                          >
-                            <Plus className="w-4 h-4" />
-                            Add Lesson
-                          </button>
-                        )}
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </motion.div>
-            );
-          })}
-
-          {/* New Section Form */}
-          {showNewSectionForm ? (
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="bg-white dark:bg-gray-900 rounded-xl border-2 border-dashed border-indigo-300 dark:border-indigo-800 p-6"
-            >
-              <h3 className="font-medium text-gray-900 dark:text-white mb-4">
-                Add New Section
-              </h3>
-              <div className="space-y-4">
-                <Input
-                  placeholder="Section title"
-                  value={newSectionTitle}
-                  onChange={(e) => setNewSectionTitle(e.target.value)}
-                />
-                <Textarea
-                  placeholder="Section description (optional)"
-                  value={newSectionDescription}
-                  onChange={(e) => setNewSectionDescription(e.target.value)}
-                  rows={2}
-                />
-                <div className="flex justify-end gap-2">
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      setNewSectionTitle('');
-                      setNewSectionDescription('');
-                      setShowNewSectionForm(false);
-                    }}
-                  >
-                    Cancel
-                  </Button>
-                  <Button onClick={handleCreateSection}>
-                    <Plus className="w-4 h-4 mr-1" />
-                    Add Section
-                  </Button>
-                </div>
-              </div>
-            </motion.div>
-          ) : (
-            <button
-              onClick={() => setShowNewSectionForm(true)}
-              className="w-full p-6 flex items-center justify-center gap-2 bg-white dark:bg-gray-900 rounded-xl border-2 border-dashed border-gray-300 dark:border-gray-700 text-gray-500 hover:text-indigo-600 hover:border-indigo-300 dark:hover:border-indigo-700 transition-colors"
-            >
-              <Plus className="w-5 h-5" />
-              Add Section
-            </button>
-          )}
-        </motion.div>
-
-        {/* Empty State */}
-        {courseSections.length === 0 && !showNewSectionForm && (
-          <div className="text-center py-16">
-            <div className="w-20 h-20 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center mx-auto mb-4">
-              <FileText className="w-10 h-10 text-gray-400" />
+              ) : (
+                <Button onClick={() => setShowAddSection(true)} className="w-full bg-orange-500 hover:bg-orange-600"><Plus className="w-4 h-4 mr-2" />Add Topic</Button>
+              )}
             </div>
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
-              No content yet
-            </h3>
-            <p className="text-gray-500 mb-4">
-              Start building your course by adding sections and lessons.
-            </p>
-            <Button onClick={() => setShowNewSectionForm(true)}>
-              <Plus className="w-4 h-4 mr-2" />
-              Add First Section
-            </Button>
+          )}
+        </div>
+
+        {sections.length === 0 && (
+          <div className="text-center py-12">
+            <FileText className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+            <h3 className="text-lg font-medium text-gray-600 dark:text-gray-400">No content yet</h3>
+            <p className="text-gray-500 mb-4">Enable Edit Mode to start adding topics and content</p>
+            {!isEditMode && <Button onClick={() => setIsEditMode(true)}>Enable Edit Mode</Button>}
           </div>
         )}
       </div>
 
-      {/* Lesson View Modal */}
       <AnimatePresence>
-        {viewingLesson && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-            onClick={() => setViewingLesson(null)}
-          >
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white dark:bg-gray-900 rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {/* Modal Header */}
-              <div className="flex items-center justify-between p-4 border-b dark:border-gray-800">
-                <div className="flex items-center gap-3">
-                  {(() => {
-                    const LessonIcon = getLessonIcon(viewingLesson.type);
-                    return <LessonIcon className="w-5 h-5 text-indigo-600" />;
-                  })()}
-                  <div>
-                    <h2 className="font-semibold text-gray-900 dark:text-white">{viewingLesson.title}</h2>
-                    <p className="text-sm text-gray-500 capitalize">{viewingLesson.type} {viewingLesson.duration && `• ${viewingLesson.duration} min`}</p>
-                  </div>
+        {addingToSection && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setAddingToSection(null)}>
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+              <div className="p-6 border-b dark:border-gray-700">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-xl font-bold">Add Content</h2>
+                  <Button variant="ghost" size="icon" onClick={() => { setAddingToSection(null); setAddContentType(null); }}><X className="w-5 h-5" /></Button>
                 </div>
-                <button onClick={() => setViewingLesson(null)} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg">
-                  <X className="w-5 h-5" />
-                </button>
               </div>
-
-              {/* Modal Content */}
-              <div className="p-6 overflow-y-auto max-h-[calc(90vh-80px)]">
-                {viewingLesson.type === 'video' && (
-                  <div className="space-y-4">
-                    {getYouTubeEmbedUrl(viewingLesson.content) ? (
-                      <div className="aspect-video rounded-xl overflow-hidden bg-gray-100 dark:bg-gray-800">
-                        <iframe
-                          src={getYouTubeEmbedUrl(viewingLesson.content) || ''}
-                          className="w-full h-full"
-                          allowFullScreen
-                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                        />
-                      </div>
-                    ) : viewingLesson.content.includes('drive.google.com') ? (
-                      <div className="aspect-video rounded-xl overflow-hidden bg-gray-100 dark:bg-gray-800">
-                        <iframe
-                          src={viewingLesson.content.replace('/view', '/preview')}
-                          className="w-full h-full"
-                          allowFullScreen
-                        />
-                      </div>
-                    ) : (
-                      <div className="p-4 bg-gray-100 dark:bg-gray-800 rounded-xl">
-                        <a href={viewingLesson.content} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-indigo-600 hover:underline">
-                          <ExternalLink className="w-4 h-4" />
-                          Open Video Link
-                        </a>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {viewingLesson.type === 'note' && (
-                  <div className="prose dark:prose-invert max-w-none" dangerouslySetInnerHTML={{ __html: viewingLesson.content }} />
-                )}
-
-                {viewingLesson.type === 'pdf' && (
-                  <div className="space-y-4">
-                    {viewingLesson.content.includes('drive.google.com') ? (
-                      <div className="aspect-[3/4] rounded-xl overflow-hidden bg-gray-100 dark:bg-gray-800">
-                        <iframe
-                          src={viewingLesson.content.replace('/view', '/preview')}
-                          className="w-full h-full"
-                        />
-                      </div>
-                    ) : (
-                      <div className="p-4 bg-gray-100 dark:bg-gray-800 rounded-xl">
-                        <a href={viewingLesson.content} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-indigo-600 hover:underline">
-                          <ExternalLink className="w-4 h-4" />
-                          Open PDF
-                        </a>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {viewingLesson.type === 'link' && (
-                  <div className="p-6 bg-gray-100 dark:bg-gray-800 rounded-xl text-center">
-                    <Link2 className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                    <a href={viewingLesson.content} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline text-lg">
-                      {viewingLesson.content}
-                    </a>
-                  </div>
-                )}
-
-                {viewingLesson.type === 'quiz' && viewingLesson.quizQuestions && (
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between p-4 bg-amber-50 dark:bg-amber-900/20 rounded-xl">
-                      <div>
-                        <p className="font-medium text-amber-800 dark:text-amber-200">{viewingLesson.quizQuestions.length} Questions</p>
-                        {viewingLesson.quizTimeLimit && <p className="text-sm text-amber-600">Time Limit: {viewingLesson.quizTimeLimit} minutes</p>}
-                      </div>
-                      <div className="text-right">
-                        {viewingLesson.quizPassingScore && <p className="text-sm text-amber-600">Passing Score: {viewingLesson.quizPassingScore}%</p>}
-                      </div>
+              <div className="p-6">
+                {!addContentType ? (
+                  <>
+                    <p className="text-gray-600 dark:text-gray-400 mb-4">Select content type:</p>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                      {CONTENT_TYPES.map((ct) => (
+                        <button key={ct.type} onClick={() => setAddContentType(ct.type)} className="p-4 rounded-xl border-2 hover:border-blue-400 transition-all flex flex-col items-center gap-2">
+                          <div className="p-3 rounded-lg bg-gray-100 dark:bg-gray-700"><ct.icon className="w-6 h-6" /></div>
+                          <span className="font-medium">{ct.label}</span>
+                        </button>
+                      ))}
                     </div>
-                    {viewingLesson.quizQuestions.map((q, idx) => (
-                      <div key={q.id} className="p-4 bg-gray-50 dark:bg-gray-800 rounded-xl">
-                        <p className="font-medium mb-3">{idx + 1}. {q.question}</p>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                          {q.options.map((opt, oi) => (
-                            <div
-                              key={oi}
-                              className={`px-3 py-2 rounded-lg text-sm ${
-                                oi === q.correctIndex
-                                  ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200 border border-emerald-300 dark:border-emerald-700'
-                                  : 'bg-white dark:bg-gray-900 border dark:border-gray-700'
-                              }`}
-                            >
-                              <span className="font-medium mr-2">{String.fromCharCode(65 + oi)}.</span>
-                              {opt}
-                              {oi === q.correctIndex && <CheckCircle2 className="w-4 h-4 inline ml-2 text-emerald-600" />}
-                            </div>
-                          ))}
+                  </>
+                ) : (
+                  <div className="space-y-4">
+                    <Input placeholder="Content title..." value={newContentTitle} onChange={(e) => setNewContentTitle(e.target.value)} />
+                    {addContentType === 'note' && (
+                      <div className="bg-white dark:bg-gray-900 rounded-lg border">
+                        <ReactQuill theme="snow" value={newContentData} onChange={setNewContentData} modules={quillModules} className="min-h-[200px]" />
+                      </div>
+                    )}
+                    {addContentType === 'video' && <Input placeholder="Video URL (YouTube, Vimeo, etc.)" value={newContentData} onChange={(e) => setNewContentData(e.target.value)} />}
+                    {addContentType === 'link' && <Input placeholder="External URL" value={newContentData} onChange={(e) => setNewContentData(e.target.value)} />}
+                    {addContentType === 'pdf' && <Input placeholder="PDF URL" value={newContentData} onChange={(e) => setNewContentData(e.target.value)} />}
+                    {addContentType === 'live-class' && (
+                      <div className="space-y-3">
+                        <Input placeholder="Live class URL (Zoom, Meet, etc.)" value={newContentData} onChange={(e) => setNewContentData(e.target.value)} />
+                        <p className="text-sm text-gray-500">Add the meeting link for your live class</p>
+                      </div>
+                    )}
+                    {addContentType === 'quiz' && (
+                      <div className="space-y-4">
+                        {quizQuestions.length > 0 && (
+                          <div className="space-y-2">
+                            <h4 className="font-medium">Questions ({quizQuestions.length})</h4>
+                            {quizQuestions.map((q, idx) => (
+                              <div key={q.id} className="p-3 bg-gray-50 dark:bg-gray-900 rounded-lg flex items-center justify-between">
+                                <span className="text-sm">{idx + 1}. {q.question}</span>
+                                <Button variant="ghost" size="sm" onClick={() => setQuizQuestions(quizQuestions.filter((qq) => qq.id !== q.id))}><Trash2 className="w-4 h-4 text-red-500" /></Button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <div className="p-4 border dark:border-gray-700 rounded-xl space-y-3">
+                          <h4 className="font-medium">Add Question</h4>
+                          <Textarea placeholder="Enter question..." value={newQuestion} onChange={(e) => setNewQuestion(e.target.value)} />
+                          <div className="grid grid-cols-2 gap-2">
+                            {newOptions.map((opt, idx) => (
+                              <div key={idx} className="flex items-center gap-2">
+                                <button onClick={() => setCorrectIndex(idx)} className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${correctIndex === idx ? 'bg-green-500 text-white' : 'bg-gray-200 dark:bg-gray-700'}`}>{String.fromCharCode(65 + idx)}</button>
+                                <Input placeholder={`Option ${String.fromCharCode(65 + idx)}`} value={opt} onChange={(e) => { const newOpts = [...newOptions]; newOpts[idx] = e.target.value; setNewOptions(newOpts); }} className="flex-1" />
+                              </div>
+                            ))}
+                          </div>
+                          <p className="text-xs text-gray-500">Click the letter to mark correct answer (green = correct)</p>
+                          <Button onClick={handleAddQuizQuestion} className="w-full"><Plus className="w-4 h-4 mr-2" />Add Question</Button>
                         </div>
                       </div>
-                    ))}
-                  </div>
-                )}
-
-                {viewingLesson.type === 'live-class' && (
-                  <div className="p-6 bg-rose-50 dark:bg-rose-900/20 rounded-xl text-center">
-                    <Calendar className="w-12 h-12 text-rose-400 mx-auto mb-4" />
-                    <h3 className="font-medium text-rose-800 dark:text-rose-200 mb-2">Live Class</h3>
-                    <a href={viewingLesson.content} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 px-4 py-2 bg-rose-600 text-white rounded-lg hover:bg-rose-700">
-                      <Play className="w-4 h-4" />
-                      Join Meeting
-                    </a>
+                    )}
+                    <div className="flex gap-2 pt-4">
+                      <Button variant="outline" onClick={() => setAddContentType(null)} className="flex-1">Back</Button>
+                      <Button onClick={handleAddContent} disabled={!newContentTitle.trim() || (addContentType === 'quiz' && quizQuestions.length === 0)} className="flex-1"><Save className="w-4 h-4 mr-2" />Save Content</Button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -993,104 +498,108 @@ export function CourseContentManager({ courseId, onBack }: CourseContentManagerP
         )}
       </AnimatePresence>
 
-      {/* Edit Lesson Modal */}
       <AnimatePresence>
-        {editingLesson && (() => {
-          const lesson = lessons.find(l => l.id === editingLesson);
-          if (!lesson) return null;
-          
-          return (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-              onClick={() => setEditingLesson(null)}
-            >
-              <motion.div
-                initial={{ scale: 0.95, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0.95, opacity: 0 }}
-                className="bg-white dark:bg-gray-900 rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-hidden"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div className="flex items-center justify-between p-4 border-b dark:border-gray-800">
-                  <h2 className="font-semibold text-gray-900 dark:text-white">Edit Lesson</h2>
-                  <button onClick={() => setEditingLesson(null)} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg">
-                    <X className="w-5 h-5" />
-                  </button>
+        {editingLesson && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setEditingLesson(null)}>
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+              <div className="p-6 border-b dark:border-gray-700">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-xl font-bold">Edit Content</h2>
+                  <Button variant="ghost" size="icon" onClick={() => setEditingLesson(null)}><X className="w-5 h-5" /></Button>
                 </div>
-
-                <div className="p-6 overflow-y-auto max-h-[calc(90vh-140px)] space-y-4">
-                  <Input
-                    placeholder="Lesson title"
-                    value={editLessonTitle}
-                    onChange={(e) => setEditLessonTitle(e.target.value)}
-                  />
-
-                  {lesson.type === 'video' && (
-                    <Input
-                      placeholder="Video URL"
-                      value={editLessonContent}
-                      onChange={(e) => setEditLessonContent(e.target.value)}
-                    />
-                  )}
-
-                  {lesson.type === 'note' && (
-                    <div className="bg-white dark:bg-gray-800 rounded-lg">
-                      <ReactQuill
-                        theme="snow"
-                        value={editLessonContent}
-                        onChange={setEditLessonContent}
-                        modules={quillModules}
-                        className="min-h-[200px]"
-                      />
-                    </div>
-                  )}
-
-                  {lesson.type === 'pdf' && (
-                    <Input
-                      placeholder="PDF URL"
-                      value={editLessonContent}
-                      onChange={(e) => setEditLessonContent(e.target.value)}
-                    />
-                  )}
-
-                  {lesson.type === 'link' && (
-                    <Input
-                      placeholder="External URL"
-                      value={editLessonContent}
-                      onChange={(e) => setEditLessonContent(e.target.value)}
-                    />
-                  )}
-
-                  <div className="flex items-center gap-4">
-                    <div className="flex-1">
-                      <label className="text-sm text-gray-500 mb-1 block">Duration (minutes)</label>
-                      <Input
-                        type="number"
-                        value={editLessonDuration}
-                        onChange={(e) => setEditLessonDuration(e.target.value)}
-                      />
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Switch checked={editLessonPreviewable} onCheckedChange={setEditLessonPreviewable} />
-                      <span className="text-sm text-gray-600 dark:text-gray-400">Free Preview</span>
-                    </div>
+              </div>
+              <div className="p-6 space-y-4">
+                <Input placeholder="Title" value={editLessonTitle} onChange={(e) => setEditLessonTitle(e.target.value)} />
+                {editingLesson.type === 'note' && (
+                  <div className="bg-white dark:bg-gray-900 rounded-lg border">
+                    <ReactQuill theme="snow" value={editLessonContent} onChange={setEditLessonContent} modules={quillModules} className="min-h-[200px]" />
                   </div>
+                )}
+                {(editingLesson.type === 'video' || editingLesson.type === 'link' || editingLesson.type === 'pdf' || editingLesson.type === 'live-class') && (
+                  <Input placeholder="URL" value={editLessonContent} onChange={(e) => setEditLessonContent(e.target.value)} />
+                )}
+                <div className="flex gap-2 pt-4">
+                  <Button variant="outline" onClick={() => setEditingLesson(null)} className="flex-1">Cancel</Button>
+                  <Button onClick={() => { const sectionWithLesson = sections.find((s) => s.lessons.some((l) => l.id === editingLesson.id)); if (sectionWithLesson) handleSaveEditLesson(sectionWithLesson.id); }} className="flex-1"><Save className="w-4 h-4 mr-2" />Save Changes</Button>
                 </div>
-
-                <div className="flex justify-end gap-2 p-4 border-t dark:border-gray-800">
-                  <Button variant="outline" onClick={() => setEditingLesson(null)}>Cancel</Button>
-                  <Button onClick={() => handleSaveEditLesson(lesson)}>
-                    <Save className="w-4 h-4 mr-1" />
-                    Save Changes
-                  </Button>
-                </div>
-              </motion.div>
+              </div>
             </motion.div>
-          );
-        })()}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {viewingLesson && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setViewingLesson(null)}>
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+              <div className="p-6 border-b dark:border-gray-700">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className={`p-2 rounded-lg ${getContentColor(viewingLesson.type as ContentType)}`}>{getContentIcon(viewingLesson.type as ContentType)}</div>
+                    <h2 className="text-xl font-bold">{viewingLesson.title}</h2>
+                  </div>
+                  <Button variant="ghost" size="icon" onClick={() => setViewingLesson(null)}><X className="w-5 h-5" /></Button>
+                </div>
+              </div>
+              <div className="p-6">
+                {viewingLesson.type === 'note' && <div className="prose dark:prose-invert max-w-none" dangerouslySetInnerHTML={{ __html: viewingLesson.content || '' }} />}
+                {viewingLesson.type === 'video' && viewingLesson.content && (
+                  <div className="aspect-video rounded-xl overflow-hidden bg-black">
+                    {viewingLesson.content.includes('youtube') || viewingLesson.content.includes('youtu.be') ? (
+                      <iframe src={viewingLesson.content.replace('watch?v=', 'embed/').replace('youtu.be/', 'youtube.com/embed/')} className="w-full h-full" allowFullScreen allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" />
+                    ) : (
+                      <div className="flex flex-col items-center justify-center h-full text-white">
+                        <Play className="w-16 h-16 mb-4" />
+                        <a href={viewingLesson.content} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline flex items-center gap-2">Open Video <ExternalLink className="w-4 h-4" /></a>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {viewingLesson.type === 'link' && viewingLesson.content && (
+                  <div className="text-center py-8">
+                    <Link2 className="w-16 h-16 text-orange-400 mx-auto mb-4" />
+                    <a href={viewingLesson.content} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline text-lg flex items-center justify-center gap-2">Open Link <ExternalLink className="w-5 h-5" /></a>
+                  </div>
+                )}
+                {viewingLesson.type === 'pdf' && viewingLesson.content && (
+                  <div className="text-center py-8">
+                    <File className="w-16 h-16 text-red-400 mx-auto mb-4" />
+                    <a href={viewingLesson.content} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline text-lg flex items-center justify-center gap-2">Open PDF <ExternalLink className="w-5 h-5" /></a>
+                  </div>
+                )}
+                {viewingLesson.type === 'live-class' && (
+                  <div className="text-center py-8">
+                    <Calendar className="w-16 h-16 text-pink-400 mx-auto mb-4" />
+                    {viewingLesson.content ? (
+                      <a href={viewingLesson.content} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 px-6 py-3 bg-pink-500 text-white rounded-xl hover:bg-pink-600"><Play className="w-5 h-5" />Join Live Class</a>
+                    ) : (
+                      <p className="text-gray-500">No meeting link available</p>
+                    )}
+                  </div>
+                )}
+                {viewingLesson.type === 'quiz' && viewingLesson.quizQuestions && (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="font-semibold">Quiz: {viewingLesson.quizQuestions.length} Questions</h3>
+                    </div>
+                    {viewingLesson.quizQuestions.map((q, idx) => (
+                      <div key={q.id} className="p-4 bg-gray-50 dark:bg-gray-900 rounded-xl">
+                        <p className="font-medium mb-3">{idx + 1}. {q.question}</p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {q.options.map((opt, oi) => (
+                            <div key={oi} className={`px-3 py-2 rounded-lg text-sm ${oi === q.correctIndex ? 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-200 border border-green-300 dark:border-green-700' : 'bg-white dark:bg-gray-800 border dark:border-gray-700'}`}>
+                              <span className="font-medium mr-2">{String.fromCharCode(65 + oi)}.</span>{opt}{oi === q.correctIndex && <CheckCircle2 className="w-4 h-4 inline ml-2 text-green-600" />}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
       </AnimatePresence>
     </div>
   );

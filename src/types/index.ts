@@ -495,9 +495,39 @@ export interface Course {
   // Metadata
   createdAt: Date
   updatedAt: Date
+  
+  // Inline embedded sections (for simpler course structure)
+  sections?: InlineSection[]
 }
 
-// Course Section (Chapter)
+// Inline Section for embedded course structure
+export interface InlineSection {
+  id: string
+  title: string
+  lessons: InlineLesson[]
+  order: number
+}
+
+// Inline Lesson for embedded course structure
+export interface InlineLesson {
+  id: string
+  title: string
+  type: 'video' | 'note' | 'quiz' | 'pdf' | 'link' | 'live-class'
+  content?: string
+  quizQuestions?: InlineMCQ[]
+  duration?: number
+  order: number
+}
+
+// Inline MCQ for embedded quizzes
+export interface InlineMCQ {
+  id: string
+  question: string
+  options: string[]
+  correctIndex: number
+}
+
+// Course Section (Chapter) - for separate collection storage
 export interface CourseSection {
   id: string
   courseId: string
