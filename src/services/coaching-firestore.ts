@@ -77,15 +77,16 @@ export async function getAllTeachers(): Promise<TeacherProfile[]> {
 export async function saveCourse(course: Course): Promise<string> {
   try {
     if (course.id && !course.id.startsWith('course_temp_')) {
-      // Update existing course
+      // Save course with existing ID (create or update)
       const docRef = doc(db, COURSES_COLLECTION, course.id);
-      await updateDoc(docRef, {
+      await setDoc(docRef, {
         ...course,
-        updatedAt: serverTimestamp()
+        updatedAt: serverTimestamp(),
+        createdAt: course.createdAt || serverTimestamp()
       });
       return course.id;
     } else {
-      // Create new course
+      // Create new course with auto-generated ID
       const docRef = await addDoc(collection(db, COURSES_COLLECTION), {
         ...course,
         createdAt: serverTimestamp(),
