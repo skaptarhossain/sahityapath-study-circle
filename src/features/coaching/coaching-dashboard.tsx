@@ -219,12 +219,16 @@ function StatsCard({ icon: Icon, label, value, trend, color }: { icon: React.Ele
     rose: 'bg-rose-100 dark:bg-rose-900/50 text-rose-600',
   };
   return (
-    <motion.div variants={fadeIn} className="bg-white dark:bg-gray-900 rounded-2xl p-5 border border-gray-200 dark:border-gray-800">
-      <div className="flex items-center justify-between">
-        <div className={`p-3 rounded-xl ${colorClasses[color]}`}><Icon className="w-6 h-6" /></div>
+    <motion.div variants={fadeIn} className="bg-white dark:bg-gray-900 rounded-2xl p-4 sm:p-5 border border-gray-200 dark:border-gray-800">
+      <div className="flex items-center gap-3 sm:justify-between sm:gap-0">
+        <div className={`p-2.5 sm:p-3 rounded-xl ${colorClasses[color]}`}><Icon className="w-5 h-5 sm:w-6 sm:h-6" /></div>
+        <div className="flex-1 sm:hidden">
+          <p className="text-xl font-bold text-gray-900 dark:text-white">{value}</p>
+          <p className="text-xs text-gray-500">{label}</p>
+        </div>
         {trend && <span className="flex items-center gap-1 text-xs text-emerald-600 bg-emerald-100 dark:bg-emerald-900/50 px-2 py-1 rounded-full"><TrendingUp className="w-3 h-3" />{trend}</span>}
       </div>
-      <div className="mt-4">
+      <div className="mt-3 hidden sm:block">
         <p className="text-2xl font-bold text-gray-900 dark:text-white">{value}</p>
         <p className="text-sm text-gray-500">{label}</p>
       </div>
@@ -357,20 +361,35 @@ export function CoachingDashboard() {
   if (managingCourse) return <CourseContentManager courseId={managingCourse} onBack={() => setManagingCourse(null)} />;
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-950">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-950 -mx-4 sm:mx-0">
+      {/* Header - Compact on mobile */}
       <div className="bg-gradient-to-r from-indigo-600 via-purple-600 to-indigo-700 text-white">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-            <div className="flex items-center gap-3">
+        <div className="max-w-7xl mx-auto px-4 py-4 sm:py-6">
+          <div className="flex items-center justify-between gap-3">
+            {/* Title - Hidden on mobile, shown on desktop */}
+            <div className="hidden sm:flex items-center gap-3">
               <div className="p-3 bg-white/20 rounded-xl backdrop-blur-sm"><GraduationCap className="w-8 h-8" /></div>
               <div>
                 <h1 className="text-2xl font-bold">Coaching Desk</h1>
                 <p className="text-white/80 text-sm">{view === 'teacher' ? 'Manage your courses' : 'Learn from the best'}</p>
               </div>
             </div>
-            <div className="flex items-center gap-2 bg-white/10 rounded-xl p-1">
-              <button onClick={() => setView('student')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${view === 'student' ? 'bg-white text-indigo-600' : 'text-white hover:bg-white/10'}`}><BookOpen className="w-4 h-4 inline mr-2" />Student</button>
-              <button onClick={() => setView('teacher')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${view === 'teacher' ? 'bg-white text-indigo-600' : 'text-white hover:bg-white/10'}`}><UserCheck className="w-4 h-4 inline mr-2" />Teacher</button>
+            {/* Mobile Title */}
+            <div className="sm:hidden">
+              <h1 className="text-lg font-bold flex items-center gap-2">
+                <GraduationCap className="w-5 h-5" /> Coaching
+              </h1>
+            </div>
+            {/* Student/Teacher Toggle */}
+            <div className="flex items-center gap-1 bg-white/10 rounded-xl p-1">
+              <button onClick={() => setView('student')} className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all ${view === 'student' ? 'bg-white text-indigo-600' : 'text-white hover:bg-white/10'}`}>
+                <BookOpen className="w-4 h-4 inline sm:mr-2" />
+                <span className="hidden sm:inline">Student</span>
+              </button>
+              <button onClick={() => setView('teacher')} className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all ${view === 'teacher' ? 'bg-white text-indigo-600' : 'text-white hover:bg-white/10'}`}>
+                <UserCheck className="w-4 h-4 inline sm:mr-2" />
+                <span className="hidden sm:inline">Teacher</span>
+              </button>
             </div>
           </div>
         </div>
@@ -392,11 +411,12 @@ export function CoachingDashboard() {
               </motion.div>
             ) : (
               <>
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                {/* Stats Grid - 2x2 on mobile, 4 columns on desktop */}
+                <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
                   <StatsCard icon={BookOpen} label="My Courses" value={teacherStats.totalCourses} color="indigo" />
-                  <StatsCard icon={Users} label="Total Students" value={teacherStats.totalStudents.toLocaleString()} trend="+12%" color="emerald" />
+                  <StatsCard icon={Users} label="Students" value={teacherStats.totalStudents.toLocaleString()} trend="+12%" color="emerald" />
                   <StatsCard icon={DollarSign} label="Revenue" value={`৳${teacherStats.totalRevenue.toLocaleString()}`} trend="+8%" color="amber" />
-                  <StatsCard icon={Star} label="Avg Rating" value={teacherStats.avgRating} color="rose" />
+                  <StatsCard icon={Star} label="Rating" value={teacherStats.avgRating} color="rose" />
                 </div>
                 
                 {/* Teacher Tabs */}
@@ -407,11 +427,18 @@ export function CoachingDashboard() {
                   </TabsList>
                   
                   {/* Courses Tab */}
-                  <TabsContent value="courses" className="space-y-6">
-                    <div className="flex flex-wrap gap-3">
-                      <Button onClick={() => setShowCourseForm(true)}><Plus className="w-4 h-4 mr-2" />Create Course</Button>
-                      <Button variant="outline" onClick={() => setShowProfileForm(true)}><Settings className="w-4 h-4 mr-2" />Edit Profile</Button>
-                      <Button variant="outline" onClick={async () => {
+                  <TabsContent value="courses" className="space-y-4 sm:space-y-6">
+                    {/* Action Buttons - Scrollable on mobile */}
+                    <div className="flex gap-2 overflow-x-auto pb-2 -mx-4 px-4 sm:mx-0 sm:px-0 sm:flex-wrap sm:overflow-visible scrollbar-hide">
+                      <Button size="sm" className="shrink-0" onClick={() => setShowCourseForm(true)}>
+                        <Plus className="w-4 h-4 sm:mr-2" />
+                        <span className="hidden sm:inline">Create Course</span>
+                      </Button>
+                      <Button size="sm" variant="outline" className="shrink-0" onClick={() => setShowProfileForm(true)}>
+                        <Settings className="w-4 h-4 sm:mr-2" />
+                        <span className="hidden sm:inline">Edit Profile</span>
+                      </Button>
+                      <Button size="sm" variant="outline" className="shrink-0" onClick={async () => {
                         try {
                           await syncLocalToFirestore(teacherProfile, myCourses);
                           toast.success('Cloud Sync সম্পন্ন!', 'আপনার সব data cloud এ save হয়েছে');
@@ -419,14 +446,23 @@ export function CoachingDashboard() {
                           console.error('Sync failed:', err);
                           toast.error('Sync ব্যর্থ!', (err as Error).message);
                         }
-                      }}><Cloud className="w-4 h-4 mr-2" />Sync to Cloud</Button>
-                      <Button variant="outline"><BarChart3 className="w-4 h-4 mr-2" />Analytics</Button>
-                      <Button variant="outline"><MessageSquare className="w-4 h-4 mr-2" />Messages</Button>
+                      }}>
+                        <Cloud className="w-4 h-4 sm:mr-2" />
+                        <span className="hidden sm:inline">Sync</span>
+                      </Button>
+                      <Button size="sm" variant="outline" className="shrink-0">
+                        <BarChart3 className="w-4 h-4 sm:mr-2" />
+                        <span className="hidden sm:inline">Analytics</span>
+                      </Button>
+                      <Button size="sm" variant="outline" className="shrink-0">
+                        <MessageSquare className="w-4 h-4 sm:mr-2" />
+                        <span className="hidden sm:inline">Messages</span>
+                      </Button>
                     </div>
                     <div>
-                      <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">My Courses</h2>
+                      <h2 className="text-lg sm:text-xl font-semibold text-gray-900 dark:text-white mb-3 sm:mb-4">My Courses</h2>
                       {myCourses.length > 0 ? (
-                        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
                           {myCourses.map((course) => (
                             <CourseCard key={course.id} course={course} isTeacher onView={() => setSelectedCourse(course.id)} onEdit={() => { setEditingCourse(course); setShowCourseForm(true); }} onManage={() => setManagingCourse(course.id)} />
                           ))}
