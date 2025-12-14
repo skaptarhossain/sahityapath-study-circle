@@ -266,20 +266,36 @@ export const useCoachingStore = create<CoachingState>()(
       },
 
       // Teacher Actions
-      addTeacher: (teacher) => set(state => ({
-        teachers: [...state.teachers, teacher],
-        teacherProfile: teacher  // Set as current teacher profile too
-      })),
-      updateTeacher: (teacherId, updates) => set(state => ({
-        teachers: state.teachers.map(t => 
-          t.id === teacherId 
-            ? { ...t, ...updates, updatedAt: new Date() }
-            : t
-        ),
-        teacherProfile: state.teacherProfile?.id === teacherId
-          ? { ...state.teacherProfile, ...updates, updatedAt: new Date() }
-          : state.teacherProfile
-      })),
+      addTeacher: (teacher) => {
+        set(state => ({
+          teachers: [...state.teachers, teacher],
+          teacherProfile: teacher  // Set as current teacher profile too
+        }));
+        // Sync to Firestore
+        saveTeacherToFirestore(teacher).catch(console.error);
+      },
+      updateTeacher: (teacherId, updates) => {
+        set(state => {
+          const updatedTeachers = state.teachers.map(t => 
+            t.id === teacherId 
+              ? { ...t, ...updates, updatedAt: new Date() }
+              : t
+          );
+          const updatedProfile = state.teacherProfile?.id === teacherId
+            ? { ...state.teacherProfile, ...updates, updatedAt: new Date() }
+            : state.teacherProfile;
+          
+          // Sync to Firestore
+          if (updatedProfile && state.teacherProfile?.id === teacherId) {
+            saveTeacherToFirestore(updatedProfile).catch(console.error);
+          }
+          
+          return {
+            teachers: updatedTeachers,
+            teacherProfile: updatedProfile
+          };
+        });
+      },
       removeTeacher: (teacherId) => set(state => ({
         teachers: state.teachers.filter(t => t.id !== teacherId)
       })),
