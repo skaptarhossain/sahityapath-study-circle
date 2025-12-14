@@ -7,6 +7,7 @@ import { useThemeStore } from './stores/theme-store'
 import { LoginForm } from './features/auth/login-form'
 import { MainLayout } from './components/layout/main-layout'
 import { Loading } from './components/loading'
+import { ToastProvider } from './components/ui/toast'
 import type { User } from './types'
 
 function App() {
@@ -73,10 +74,18 @@ function App() {
   }
 
   if (!user) {
-    return <LoginForm />
+    return (
+      <ToastProvider>
+        <LoginForm />
+      </ToastProvider>
+    )
   }
 
-  return <MainLayout />
+  return (
+    <ToastProvider>
+      <MainLayout />
+    </ToastProvider>
+  )
 }
 
 export default App

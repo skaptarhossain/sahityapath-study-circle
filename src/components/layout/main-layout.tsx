@@ -145,7 +145,7 @@ export function MainLayout() {
       </aside>
 
       {/* Main Content */}
-      <main className="lg:ml-72 pt-16 lg:pt-0 min-h-screen">
+      <main className="lg:ml-72 pt-16 lg:pt-0 pb-20 lg:pb-0 min-h-screen">
         <div className="p-4 lg:p-8">
           <AnimatePresence mode="wait">
             <motion.div
@@ -160,6 +160,33 @@ export function MainLayout() {
           </AnimatePresence>
         </div>
       </main>
+
+      {/* Mobile Bottom Navigation */}
+      <nav className="lg:hidden fixed bottom-0 left-0 right-0 bg-card border-t border-border z-50 px-2 py-1 safe-area-inset-bottom">
+        <div className="flex items-center justify-around">
+          {navItems.map((item) => (
+            <button
+              key={item.id}
+              onClick={() => setActiveTab(item.id)}
+              className={cn(
+                'flex flex-col items-center justify-center py-2 px-3 rounded-xl transition-all min-w-[64px]',
+                activeTab === item.id
+                  ? 'text-primary bg-primary/10'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              <item.icon className={cn(
+                'h-5 w-5 mb-1 transition-transform',
+                activeTab === item.id && 'scale-110'
+              )} />
+              <span className={cn(
+                'text-[10px] font-medium',
+                activeTab === item.id && 'font-semibold'
+              )}>{item.label}</span>
+            </button>
+          ))}
+        </div>
+      </nav>
     </div>
   )
 }

@@ -50,6 +50,7 @@ import { LiveTestManager } from './live-test-manager';
 import { QuestionBankManager } from './question-bank-manager';
 import { StudentManagement } from './student-management';
 import { syncLocalToFirestore } from '@/services/coaching-firestore';
+import { useToast } from '@/components/ui/toast';
 import type { Course } from '@/types';
 
 const fadeIn = {
@@ -234,6 +235,7 @@ function StatsCard({ icon: Icon, label, value, trend, color }: { icon: React.Ele
 export function CoachingDashboard() {
   const { user } = useAuthStore();
   const { courses, teachers, myCourses, teacherProfile, loadFromFirestore } = useCoachingStore();
+  const toast = useToast();
   const [view, setView] = useState<'teacher' | 'student'>('student');
   const [teacherTab, setTeacherTab] = useState<'courses' | 'settings'>('courses');
   const [searchQuery, setSearchQuery] = useState('');
@@ -412,10 +414,10 @@ export function CoachingDashboard() {
                       <Button variant="outline" onClick={async () => {
                         try {
                           await syncLocalToFirestore(teacherProfile, myCourses);
-                          alert('✅ Data synced to cloud successfully!');
+                          toast.success('Cloud Sync সম্পন্ন!', 'আপনার সব data cloud এ save হয়েছে');
                         } catch (err) {
                           console.error('Sync failed:', err);
-                          alert('❌ Sync failed: ' + (err as Error).message);
+                          toast.error('Sync ব্যর্থ!', (err as Error).message);
                         }
                       }}><Cloud className="w-4 h-4 mr-2" />Sync to Cloud</Button>
                       <Button variant="outline"><BarChart3 className="w-4 h-4 mr-2" />Analytics</Button>
