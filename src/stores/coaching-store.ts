@@ -249,8 +249,9 @@ export const useCoachingStore = create<CoachingState>()(
             set({ teachers });
           }
           
-          // Load user's courses
-          const myCourses = await getCoursesFromFirestore(userId);
+          // Load user's courses - use teacher_userId format to match course.teacherId
+          const teacherId = `teacher_${userId}`;
+          const myCourses = await getCoursesFromFirestore(teacherId);
           if (myCourses.length > 0) {
             set({ myCourses });
           }
