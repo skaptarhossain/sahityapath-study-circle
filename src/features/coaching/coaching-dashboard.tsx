@@ -33,6 +33,7 @@ import {
   Copy,
   Crown,
   Timer,
+  Cloud,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -48,6 +49,7 @@ import { CourseContentManager } from './course-content-manager';
 import { LiveTestManager } from './live-test-manager';
 import { QuestionBankManager } from './question-bank-manager';
 import { StudentManagement } from './student-management';
+import { syncLocalToFirestore } from '@/services/coaching-firestore';
 import type { Course } from '@/types';
 
 const fadeIn = {
@@ -407,6 +409,15 @@ export function CoachingDashboard() {
                     <div className="flex flex-wrap gap-3">
                       <Button onClick={() => setShowCourseForm(true)}><Plus className="w-4 h-4 mr-2" />Create Course</Button>
                       <Button variant="outline" onClick={() => setShowProfileForm(true)}><Settings className="w-4 h-4 mr-2" />Edit Profile</Button>
+                      <Button variant="outline" onClick={async () => {
+                        try {
+                          await syncLocalToFirestore(teacherProfile, myCourses);
+                          alert('✅ Data synced to cloud successfully!');
+                        } catch (err) {
+                          console.error('Sync failed:', err);
+                          alert('❌ Sync failed: ' + (err as Error).message);
+                        }
+                      }}><Cloud className="w-4 h-4 mr-2" />Sync to Cloud</Button>
                       <Button variant="outline"><BarChart3 className="w-4 h-4 mr-2" />Analytics</Button>
                       <Button variant="outline"><MessageSquare className="w-4 h-4 mr-2" />Messages</Button>
                     </div>

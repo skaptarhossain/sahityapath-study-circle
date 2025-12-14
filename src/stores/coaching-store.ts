@@ -268,12 +268,15 @@ export const useCoachingStore = create<CoachingState>()(
 
       // Teacher Actions
       addTeacher: (teacher) => {
+        console.log('Adding teacher:', teacher);
         set(state => ({
           teachers: [...state.teachers, teacher],
           teacherProfile: teacher  // Set as current teacher profile too
         }));
         // Sync to Firestore
-        saveTeacherToFirestore(teacher).catch(console.error);
+        saveTeacherToFirestore(teacher)
+          .then(() => console.log('✅ Teacher saved to Firestore!'))
+          .catch(err => console.error('❌ Failed to save teacher:', err));
       },
       updateTeacher: (teacherId, updates) => {
         set(state => {
@@ -323,20 +326,26 @@ export const useCoachingStore = create<CoachingState>()(
       // Course Actions
       setCourses: (courses) => set({ courses }),
       addCourse: (course) => {
+        console.log('Adding course:', course);
         set(state => ({
           courses: [...state.courses, course],
           myCourses: [...state.myCourses, course]
         }));
         // Sync to Firestore
-        saveCourseToFirestore(course).catch(console.error);
+        saveCourseToFirestore(course)
+          .then((id) => console.log('✅ Course saved to Firestore! ID:', id))
+          .catch(err => console.error('❌ Failed to save course:', err));
       },
       updateCourse: (course) => {
+        console.log('Updating course:', course.id);
         set(state => ({
           courses: state.courses.map(c => c.id === course.id ? course : c),
           myCourses: state.myCourses.map(c => c.id === course.id ? course : c)
         }));
         // Sync to Firestore
-        saveCourseToFirestore(course).catch(console.error);
+        saveCourseToFirestore(course)
+          .then(() => console.log('✅ Course updated in Firestore!'))
+          .catch(err => console.error('❌ Failed to update course:', err));
       },
       removeCourse: (courseId) => {
         set(state => ({
