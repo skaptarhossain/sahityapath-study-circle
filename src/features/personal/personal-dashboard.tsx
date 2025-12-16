@@ -1,10 +1,11 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Plus,
   Trash2,
   ChevronDown,
   ChevronRight,
+  ChevronLeft,
   FileText,
   HelpCircle,
   Play,
@@ -25,8 +26,17 @@ import {
   Link,
   Image,
   Library,
+  Clock,
+  Calendar,
+  Target,
+  Eye,
+  History,
+  RefreshCw,
+  CheckCircle2,
+  XCircle,
+  CircleDot,
 } from 'lucide-react'
-import { Card, CardContent } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -41,7 +51,7 @@ import ReactQuill from 'react-quill'
 import 'react-quill/dist/quill.snow.css'
 import { TestRunner } from './test-runner'
 import type { PersonalSubTab } from '@/components/layout/main-layout'
-import type { PersonalCourse, PersonalTopic, PersonalContentItem, PersonalMCQ } from '@/types'
+import type { PersonalCourse, PersonalTopic, PersonalContentItem, PersonalMCQ, PersonalLiveTest, PersonalLiveTestResult, PersonalAutoLiveTestConfig } from '@/types'
 
 interface PersonalDashboardProps {
   activeSubTab: PersonalSubTab
@@ -76,6 +86,17 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
     getMCQsByCourse,
     loadFromFirebase,
     subscribeToFirebase,
+    // Live Test
+    liveTests,
+    liveTestResults,
+    addLiveTest,
+    updateLiveTest,
+    removeLiveTest,
+    getLiveTestsByCourse,
+    addLiveTestResult,
+    getLiveTestResultsByTest,
+    setAutoLiveTestConfig,
+    getAutoLiveTestConfig,
   } = usePersonalStore()
 
   // Local state
@@ -125,6 +146,41 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
     getTopicsBySubject: getAssetTopicsBySubject,
   } = useAssetStore()
 
+  // ===========================
+  // Live Test State
+  // ===========================
+  const [liveTestTab, setLiveTestTab] = useState<'upcoming' | 'past' | 'results'>('upcoming')
+  const [settingsLiveTestTab, setSettingsLiveTestTab] = useState<'schedule' | 'auto-daily'>('schedule')
+  const [liveTestMgmtTab, setLiveTestMgmtTab] = useState<'schedule' | 'auto'>('schedule')
+  
+  // Running Live Test state
+  const [runningLiveTest, setRunningLiveTest] = useState<PersonalLiveTest | null>(null)
+  const [liveTestQuestions, setLiveTestQuestions] = useState<PersonalMCQ[]>([])
+  const [liveTestCurrentQ, setLiveTestCurrentQ] = useState(0)
+  const [liveTestAnswers, setLiveTestAnswers] = useState<Record<string, number>>({})
+  const [liveTestStartedAt, setLiveTestStartedAt] = useState<number>(0)
+  const [viewingLiveTestResult, setViewingLiveTestResult] = useState<PersonalLiveTestResult | null>(null)
+  const [viewingLiveTestSolutions, setViewingLiveTestSolutions] = useState(false)
+  
+  // Create Live Test form
+  const [showCreateLiveTest, setShowCreateLiveTest] = useState(false)
+  const [newLiveTestTitle, setNewLiveTestTitle] = useState('')
+  const [newLiveTestDuration, setNewLiveTestDuration] = useState('30')
+  const [newLiveTestCategories, setNewLiveTestCategories] = useState<string[]>([])
+  const [newLiveTestQuestionCount, setNewLiveTestQuestionCount] = useState('20')
+  const [newLiveTestShowSolution, setNewLiveTestShowSolution] = useState(true)
+  
+  // Auto Daily Test states
+  const [autoTestEnabled, setAutoTestEnabled] = useState(false)
+  const [autoTestTitle, setAutoTestTitle] = useState('Daily Practice Test')
+  const [autoTestCategories, setAutoTestCategories] = useState<string[]>([])
+  const [autoTestStartTime, setAutoTestStartTime] = useState('10:00')
+  const [autoTestEndTime, setAutoTestEndTime] = useState('22:00')
+  const [autoTestDuration, setAutoTestDuration] = useState('30')
+  const [autoTestQuestionCount, setAutoTestQuestionCount] = useState('20')
+  const [autoTestDays, setAutoTestDays] = useState<number[]>([0, 1, 2, 3, 4, 5, 6])
+  const [autoTestShowSolution, setAutoTestShowSolution] = useState(true)
+
   // Active course
   const activeCourse = activeCourseId ? courses.find(c => c.id === activeCourseId) : null
   
@@ -136,6 +192,61 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
   const courseMCQList = activeCourseId 
     ? courseMCQs.filter(m => m.courseId === activeCourseId)
     : []
+    
+  // Live Tests for this course
+  const courseLiveTests = useMemo(() => {
+    if (!activeCourseId) return []
+    return getLiveTestsByCourse(activeCourseId).sort((a, b) => b.createdAt - a.createdAt)
+  }, [activeCourseId, liveTests])
+  
+  // Auto Test Config for this course
+  const currentAutoTestConfig = useMemo(() => {
+    if (!activeCourseId) return null
+    return getAutoLiveTestConfig(activeCourseId)
+  }, [activeCourseId, getAutoLiveTestConfig])
+  
+  // Check if Auto Test is currently active
+  const isAutoTestActive = useMemo(() => {
+    if (!currentAutoTestConfig || !currentAutoTestConfig.enabled) return false
+    
+    const now = new Date()
+    const currentDay = now.getDay()
+    if (!currentAutoTestConfig.activeDays.includes(currentDay)) return false
+    
+    const currentTime = now.getHours() * 60 + now.getMinutes()
+    const [startH, startM] = currentAutoTestConfig.startTime.split(':').map(Number)
+    const [endH, endM] = currentAutoTestConfig.endTime.split(':').map(Number)
+    const startMinutes = startH * 60 + startM
+    const endMinutes = endH * 60 + endM
+    
+    return currentTime >= startMinutes && currentTime <= endMinutes
+  }, [currentAutoTestConfig])
+  
+  // Load Auto Test config when course changes
+  useEffect(() => {
+    if (currentAutoTestConfig) {
+      setAutoTestEnabled(currentAutoTestConfig.enabled)
+      setAutoTestTitle(currentAutoTestConfig.title)
+      setAutoTestCategories(currentAutoTestConfig.categoryIds)
+      setAutoTestStartTime(currentAutoTestConfig.startTime)
+      setAutoTestEndTime(currentAutoTestConfig.endTime)
+      setAutoTestDuration(String(currentAutoTestConfig.duration))
+      setAutoTestQuestionCount(String(currentAutoTestConfig.questionCount))
+      setAutoTestDays(currentAutoTestConfig.activeDays)
+      setAutoTestShowSolution(currentAutoTestConfig.showSolution)
+    } else {
+      // Reset to defaults
+      setAutoTestEnabled(false)
+      setAutoTestTitle('Daily Practice Test')
+      setAutoTestCategories([])
+      setAutoTestStartTime('10:00')
+      setAutoTestEndTime('22:00')
+      setAutoTestDuration('30')
+      setAutoTestQuestionCount('20')
+      setAutoTestDays([0, 1, 2, 3, 4, 5, 6])
+      setAutoTestShowSolution(true)
+    }
+  }, [currentAutoTestConfig, activeCourseId])
 
   // Load data on mount
   useEffect(() => {
@@ -351,6 +462,216 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
     })
   }
 
+  // ===========================
+  // Live Test Handlers
+  // ===========================
+  
+  // Create Manual Live Test
+  const handleCreateLiveTest = () => {
+    if (!newLiveTestTitle.trim() || !activeCourseId || !user) {
+      alert('Please enter a test title')
+      return
+    }
+    
+    // Get questions based on selected categories
+    let availableQuestions = courseMCQList
+    if (newLiveTestCategories.length > 0) {
+      availableQuestions = courseMCQList.filter(q => newLiveTestCategories.includes(q.categoryId || ''))
+    }
+    
+    if (availableQuestions.length === 0) {
+      alert('No questions available in selected categories')
+      return
+    }
+    
+    const liveTest: PersonalLiveTest = {
+      id: uuidv4(),
+      courseId: activeCourseId,
+      userId: user.id,
+      title: newLiveTestTitle.trim(),
+      categoryIds: newLiveTestCategories,
+      questionCount: Math.min(parseInt(newLiveTestQuestionCount), availableQuestions.length),
+      duration: parseInt(newLiveTestDuration),
+      status: 'scheduled',
+      showSolution: newLiveTestShowSolution,
+      createdAt: Date.now()
+    }
+    
+    addLiveTest(liveTest)
+    
+    // Reset form
+    setShowCreateLiveTest(false)
+    setNewLiveTestTitle('')
+    setNewLiveTestDuration('30')
+    setNewLiveTestCategories([])
+    setNewLiveTestQuestionCount('20')
+    setNewLiveTestShowSolution(true)
+    
+    alert('Live Test created successfully!')
+  }
+  
+  // Save Auto Daily Test Config
+  const handleSaveAutoTestConfig = () => {
+    if (!activeCourseId || !user) return
+    
+    if (autoTestEnabled && autoTestCategories.length === 0 && courseMCQList.length === 0) {
+      alert('Please add MCQs to your course first or select categories')
+      return
+    }
+    
+    const config: PersonalAutoLiveTestConfig = {
+      id: `auto-${activeCourseId}`,
+      courseId: activeCourseId,
+      userId: user.id,
+      enabled: autoTestEnabled,
+      title: autoTestTitle,
+      categoryIds: autoTestCategories,
+      startTime: autoTestStartTime,
+      endTime: autoTestEndTime,
+      duration: parseInt(autoTestDuration),
+      questionCount: parseInt(autoTestQuestionCount),
+      activeDays: autoTestDays,
+      showSolution: autoTestShowSolution,
+      createdAt: currentAutoTestConfig?.createdAt || Date.now(),
+      updatedAt: Date.now()
+    }
+    
+    setAutoLiveTestConfig(config)
+    alert('Auto Daily Test settings saved!')
+  }
+  
+  // Start Live Test (Manual or Auto)
+  const startLiveTest = (test: PersonalLiveTest) => {
+    // Get questions based on categories
+    let availableQuestions = courseMCQList
+    if (test.categoryIds.length > 0) {
+      availableQuestions = courseMCQList.filter(q => test.categoryIds.includes(q.categoryId || ''))
+    }
+    
+    if (availableQuestions.length === 0) {
+      alert('No questions available')
+      return
+    }
+    
+    // Shuffle and pick questions
+    const shuffled = [...availableQuestions].sort(() => Math.random() - 0.5)
+    const selectedQuestions = shuffled.slice(0, test.questionCount)
+    
+    setLiveTestQuestions(selectedQuestions)
+    setLiveTestCurrentQ(0)
+    setLiveTestAnswers({})
+    setLiveTestStartedAt(Date.now())
+    setRunningLiveTest(test)
+    
+    // Update test status
+    updateLiveTest({ ...test, status: 'active', startedAt: Date.now() })
+  }
+  
+  // Start Auto Test
+  const startAutoTest = () => {
+    if (!currentAutoTestConfig || !activeCourseId || !user) return
+    
+    // Get questions
+    let availableQuestions = courseMCQList
+    if (currentAutoTestConfig.categoryIds.length > 0) {
+      availableQuestions = courseMCQList.filter(q => currentAutoTestConfig.categoryIds.includes(q.categoryId || ''))
+    }
+    
+    if (availableQuestions.length === 0) {
+      alert('No questions available')
+      return
+    }
+    
+    // Create a temporary test
+    const autoTest: PersonalLiveTest = {
+      id: `auto-${Date.now()}`,
+      courseId: activeCourseId,
+      userId: user.id,
+      title: currentAutoTestConfig.title,
+      categoryIds: currentAutoTestConfig.categoryIds,
+      questionCount: Math.min(currentAutoTestConfig.questionCount, availableQuestions.length),
+      duration: currentAutoTestConfig.duration,
+      status: 'active',
+      showSolution: currentAutoTestConfig.showSolution,
+      startedAt: Date.now(),
+      createdAt: Date.now()
+    }
+    
+    // Shuffle and pick questions
+    const shuffled = [...availableQuestions].sort(() => Math.random() - 0.5)
+    const selectedQuestions = shuffled.slice(0, autoTest.questionCount)
+    
+    setLiveTestQuestions(selectedQuestions)
+    setLiveTestCurrentQ(0)
+    setLiveTestAnswers({})
+    setLiveTestStartedAt(Date.now())
+    setRunningLiveTest(autoTest)
+  }
+  
+  // Submit Live Test
+  const submitLiveTest = () => {
+    if (!runningLiveTest || !user || !activeCourseId) return
+    
+    const timeTaken = Math.round((Date.now() - liveTestStartedAt) / 1000)
+    
+    let correct = 0
+    let wrong = 0
+    let unanswered = 0
+    
+    const answers = liveTestQuestions.map(q => {
+      const selected = liveTestAnswers[q.id] !== undefined ? liveTestAnswers[q.id] : null
+      if (selected === null) {
+        unanswered++
+      } else if (selected === q.correctIndex) {
+        correct++
+      } else {
+        wrong++
+      }
+      return { questionId: q.id, selected, correct: q.correctIndex }
+    })
+    
+    const score = Math.round((correct / liveTestQuestions.length) * 100)
+    
+    const result: PersonalLiveTestResult = {
+      id: uuidv4(),
+      testId: runningLiveTest.id,
+      courseId: activeCourseId,
+      userId: user.id,
+      score,
+      correct,
+      wrong,
+      unanswered,
+      total: liveTestQuestions.length,
+      timeTaken,
+      answers,
+      submittedAt: Date.now()
+    }
+    
+    addLiveTestResult(result)
+    
+    // Update test status
+    if (!runningLiveTest.id.startsWith('auto-')) {
+      updateLiveTest({ ...runningLiveTest, status: 'completed', endedAt: Date.now() })
+    }
+    
+    setViewingLiveTestResult(result)
+    setRunningLiveTest(null)
+    setLiveTestQuestions([])
+    setLiveTestTab('results')
+  }
+  
+  // Format time remaining
+  const formatTimeRemaining = (startedAt: number, duration: number): string => {
+    const endTime = startedAt + duration * 60 * 1000
+    const remaining = endTime - Date.now()
+    
+    if (remaining <= 0) return '0:00'
+    
+    const minutes = Math.floor(remaining / 60000)
+    const seconds = Math.floor((remaining % 60000) / 1000)
+    return `${minutes}:${String(seconds).padStart(2, '0')}`
+  }
+
   // Rich text modules
   const quillModules = {
     toolbar: [
@@ -401,6 +722,156 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
           }}
           onBack={() => setRunningQuiz(null)}
         />
+      </div>
+    )
+  }
+
+  // ===============================
+  // Render: Live Test Running
+  // ===============================
+  if (runningLiveTest && liveTestQuestions.length > 0) {
+    return (
+      <div className="p-4 md:p-6 max-w-4xl mx-auto pb-20 lg:pb-6">
+        <Card className="p-3 sm:p-6">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-3 sm:mb-4">
+            <div className="flex items-center gap-2 sm:gap-4 text-sm">
+              <span className="font-medium">Q {liveTestCurrentQ + 1}/{liveTestQuestions.length}</span>
+              <span className="text-red-500 font-medium">
+                <Clock className="h-3.5 w-3.5 inline mr-1" />
+                {formatTimeRemaining(liveTestStartedAt, runningLiveTest.duration)}
+              </span>
+            </div>
+            <Button variant="destructive" size="sm" className="h-8 text-xs" onClick={submitLiveTest}>
+              <Check className="h-3.5 w-3.5 sm:mr-1" /> <span className="hidden sm:inline">Submit</span>
+            </Button>
+          </div>
+          
+          {/* Question Navigator */}
+          <div className="flex flex-wrap gap-1.5 sm:gap-2 mb-3 sm:mb-4 p-2 sm:p-3 bg-muted/50 rounded overflow-x-auto">
+            {liveTestQuestions.map((_, i) => (
+              <button
+                key={i}
+                onClick={() => setLiveTestCurrentQ(i)}
+                className={`min-w-[28px] w-7 h-7 sm:w-8 sm:h-8 rounded text-xs sm:text-sm font-medium transition-colors ${
+                  liveTestCurrentQ === i 
+                    ? 'bg-primary text-primary-foreground' 
+                    : liveTestAnswers[liveTestQuestions[i].id] !== undefined
+                      ? 'bg-green-500 text-white'
+                      : 'bg-background border'
+                }`}
+              >
+                {i + 1}
+              </button>
+            ))}
+          </div>
+          
+          <h3 className="text-base sm:text-lg font-medium mb-3 sm:mb-4">{liveTestQuestions[liveTestCurrentQ]?.question}</h3>
+          <div className="space-y-2">
+            {liveTestQuestions[liveTestCurrentQ]?.options.map((opt, i) => (
+              <div 
+                key={i}
+                className={`p-2.5 sm:p-3 border rounded cursor-pointer transition-colors text-sm ${
+                  liveTestAnswers[liveTestQuestions[liveTestCurrentQ].id] === i 
+                    ? 'border-primary bg-primary/10' 
+                    : 'hover:bg-muted'
+                }`}
+                onClick={() => setLiveTestAnswers(prev => ({ ...prev, [liveTestQuestions[liveTestCurrentQ].id]: i }))}
+              >
+                <span className="font-medium mr-2">{String.fromCharCode(65 + i)}.</span> {opt}
+              </div>
+            ))}
+          </div>
+          <div className="flex justify-between pt-3 sm:pt-4">
+            <Button 
+              variant="outline" 
+              size="sm"
+              className="h-8 text-xs sm:text-sm"
+              disabled={liveTestCurrentQ === 0} 
+              onClick={() => setLiveTestCurrentQ(p => p - 1)}
+            >
+              <ChevronLeft className="h-4 w-4" />
+              <span className="hidden sm:inline ml-1">Previous</span>
+            </Button>
+            {liveTestCurrentQ < liveTestQuestions.length - 1 ? (
+              <Button size="sm" className="h-8 text-xs sm:text-sm" onClick={() => setLiveTestCurrentQ(p => p + 1)}>
+                <span className="hidden sm:inline mr-1">Next</span>
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            ) : (
+              <Button size="sm" className="h-8 text-xs sm:text-sm" onClick={submitLiveTest}>
+                <Check className="h-3.5 w-3.5 mr-1" /> Submit
+              </Button>
+            )}
+          </div>
+        </Card>
+      </div>
+    )
+  }
+
+  // ===============================
+  // Render: View Live Test Solutions
+  // ===============================
+  if (viewingLiveTestSolutions && viewingLiveTestResult) {
+    return (
+      <div className="p-4 md:p-6 max-w-4xl mx-auto pb-20 lg:pb-6">
+        <Card className="p-3 sm:p-6">
+          <div className="flex justify-between items-center mb-4 sm:mb-6">
+            <h3 className="text-base sm:text-lg font-semibold">View Solutions</h3>
+            <Button variant="outline" size="sm" className="h-8" onClick={() => setViewingLiveTestSolutions(false)}>
+              <X className="h-3.5 w-3.5 sm:mr-1" /> <span className="hidden sm:inline">Close</span>
+            </Button>
+          </div>
+          
+          <div className="space-y-4 sm:space-y-6">
+            {viewingLiveTestResult.answers.map((ans, idx) => {
+              const question = courseMCQs.find(q => q.id === ans.questionId)
+              if (!question) return null
+              
+              const isCorrect = ans.selected === ans.correct
+              const wasSkipped = ans.selected === null
+              
+              return (
+                <div key={ans.questionId} className={`p-3 sm:p-4 rounded-lg border ${isCorrect ? 'border-green-500 bg-green-50 dark:bg-green-950/20' : wasSkipped ? 'border-gray-400 bg-gray-50 dark:bg-gray-950/20' : 'border-red-500 bg-red-50 dark:bg-red-950/20'}`}>
+                  <div className="flex items-start justify-between mb-2 sm:mb-3">
+                    <span className="text-xs sm:text-sm font-medium">Q{idx + 1}.</span>
+                    {isCorrect ? (
+                      <span className="text-green-600 text-xs sm:text-sm flex items-center"><CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Correct</span>
+                    ) : wasSkipped ? (
+                      <span className="text-gray-500 text-xs sm:text-sm flex items-center"><CircleDot className="h-3.5 w-3.5 mr-1" /> Skipped</span>
+                    ) : (
+                      <span className="text-red-600 text-xs sm:text-sm flex items-center"><XCircle className="h-3.5 w-3.5 mr-1" /> Wrong</span>
+                    )}
+                  </div>
+                  <p className="font-medium mb-2 sm:mb-3 text-sm sm:text-base">{question.question}</p>
+                  <div className="space-y-1.5 sm:space-y-2">
+                    {question.options.map((opt, i) => (
+                      <div 
+                        key={i} 
+                        className={`p-1.5 sm:p-2 rounded text-xs sm:text-sm ${
+                          i === ans.correct 
+                            ? 'bg-green-200 dark:bg-green-900 font-medium' 
+                            : ans.selected === i && !isCorrect
+                              ? 'bg-red-200 dark:bg-red-900'
+                              : ''
+                        }`}
+                      >
+                        <span className="font-medium mr-1.5 sm:mr-2">{String.fromCharCode(65 + i)}.</span>
+                        {opt}
+                        {i === ans.correct && <Check className="h-3.5 w-3.5 inline ml-1.5 text-green-600" />}
+                        {ans.selected === i && !isCorrect && <X className="h-3.5 w-3.5 inline ml-1.5 text-red-600" />}
+                      </div>
+                    ))}
+                  </div>
+                  {question.explanation && (
+                    <div className="mt-2 p-2 bg-blue-50 dark:bg-blue-900/20 rounded text-xs sm:text-sm">
+                      <span className="font-medium">Explanation:</span> {question.explanation}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </Card>
       </div>
     )
   }
@@ -922,72 +1393,242 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
           )}
         </TabsContent>
 
-        {/* Live Test Tab */}
+        {/* Live Test Tab - Same as Group Study */}
         <TabsContent value="live-test" className="mt-4 space-y-4">
-          <div>
-            <h2 className="text-lg font-semibold">Practice Quiz</h2>
-            <p className="text-sm text-muted-foreground">Test your knowledge</p>
+          {/* Auto Daily Test Banner */}
+          {isAutoTestActive && currentAutoTestConfig && (
+            <Card className="border-2 border-green-500 bg-green-50 dark:bg-green-900/20">
+              <CardContent className="p-3 sm:p-4">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-3">
+                  <div className="flex items-center gap-2 sm:gap-3">
+                    <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 bg-green-500 rounded-full animate-pulse" />
+                    <div>
+                      <h4 className="font-semibold text-sm sm:text-base text-green-700 dark:text-green-400">
+                        {currentAutoTestConfig.title}
+                      </h4>
+                      <p className="text-xs sm:text-sm text-muted-foreground">
+                        {currentAutoTestConfig.questionCount} Q • {currentAutoTestConfig.duration} min
+                      </p>
+                    </div>
+                  </div>
+                  <Button 
+                    size="sm"
+                    className="h-8 text-xs sm:text-sm w-full sm:w-auto bg-green-600 hover:bg-green-700"
+                    onClick={startAutoTest}
+                  >
+                    <Play className="h-4 w-4 mr-2" />
+                    Start Daily Test
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground mt-2">
+                  Available until {currentAutoTestConfig.endTime} today
+                </p>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Sub-tabs - Same as Group Study: Upcoming, Past Tests, My Results */}
+          <div className="flex gap-2 border-b pb-2 mb-4">
+            <Button 
+              variant={liveTestTab === 'upcoming' ? 'default' : 'ghost'} 
+              size="sm"
+              onClick={() => setLiveTestTab('upcoming')}
+            >
+              <Clock className="h-4 w-4 mr-1" /> Upcoming
+            </Button>
+            <Button 
+              variant={liveTestTab === 'past' ? 'default' : 'ghost'} 
+              size="sm"
+              onClick={() => setLiveTestTab('past')}
+            >
+              <History className="h-4 w-4 mr-1" /> Past Tests
+            </Button>
+            <Button 
+              variant={liveTestTab === 'results' ? 'default' : 'ghost'} 
+              size="sm"
+              onClick={() => setLiveTestTab('results')}
+            >
+              <Trophy className="h-4 w-4 mr-1" /> My Results
+            </Button>
           </div>
 
-          <Card className="p-4">
-            <h3 className="font-semibold mb-3">Start a Quiz</h3>
-            {courseMCQList.length === 0 ? (
-              <p className="text-muted-foreground text-sm">Add MCQs to your course first!</p>
-            ) : (
-              <div className="space-y-3">
-                <Button onClick={() => handleStartQuiz()} className="w-full">
-                  <Play className="h-4 w-4 mr-2" /> 
-                  All MCQs ({courseMCQList.length} questions)
-                </Button>
-                
-                {courseTopics.filter(t => courseMCQList.some(m => m.categoryId === t.id)).length > 0 && (
-                  <>
-                    <div className="text-sm text-muted-foreground text-center">or by chapter</div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                      {courseTopics.map(topic => {
-                        const count = courseMCQList.filter(m => m.categoryId === topic.id).length
-                        if (count === 0) return null
-                        return (
-                          <Button 
-                            key={topic.id}
-                            variant="outline"
-                            onClick={() => handleStartQuiz(topic.id)}
-                          >
-                            {topic.name} ({count})
-                          </Button>
-                        )
-                      })}
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
-          </Card>
-
-          {/* Recent Results */}
-          {quizResults.filter(r => r.courseId === activeCourseId).length > 0 && (
-            <Card className="p-4">
-              <h3 className="font-semibold mb-3">Recent Results</h3>
-              <div className="space-y-2">
-                {quizResults
-                  .filter(r => r.courseId === activeCourseId)
-                  .slice(-5)
-                  .reverse()
-                  .map(result => (
-                    <div key={result.id} className="flex items-center justify-between p-2 bg-muted/50 rounded">
-                      <div className="text-sm">
-                        <span className="font-medium">{result.correct}/{result.total}</span>
-                        <span className="text-muted-foreground ml-2">
-                          ({Math.round(result.score)}%)
-                        </span>
+          {/* Upcoming Tests Tab */}
+          {liveTestTab === 'upcoming' && (
+            <div className="space-y-4">
+              {courseLiveTests.filter(t => t.status === 'scheduled').length === 0 ? (
+                <Card className="p-8 text-center">
+                  <Clock className="h-16 w-16 mx-auto text-muted-foreground mb-4" />
+                  <h3 className="text-lg font-semibold mb-2">No Upcoming Tests</h3>
+                  <p className="text-muted-foreground">Check back later for scheduled tests</p>
+                </Card>
+              ) : (
+                courseLiveTests.filter(t => t.status === 'scheduled').map(test => (
+                  <Card key={test.id} className="p-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="font-semibold">{test.title}</h3>
+                        <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
+                          <span><Target className="h-4 w-4 inline mr-1" /> {test.questionCount} questions</span>
+                          <span><Clock className="h-4 w-4 inline mr-1" /> {test.duration} min</span>
+                        </div>
                       </div>
-                      <span className="text-xs text-muted-foreground">
-                        {new Date(result.createdAt).toLocaleDateString()}
-                      </span>
+                      <Button onClick={() => startLiveTest(test)}>
+                        <Play className="h-4 w-4 mr-2" /> Start
+                      </Button>
                     </div>
-                  ))}
-              </div>
-            </Card>
+                  </Card>
+                ))
+              )}
+            </div>
+          )}
+
+          {/* Past Tests Tab */}
+          {liveTestTab === 'past' && (
+            <div className="space-y-4">
+              {courseLiveTests.filter(t => t.status === 'completed').length === 0 ? (
+                <Card className="p-8 text-center">
+                  <History className="h-16 w-16 mx-auto text-muted-foreground mb-4" />
+                  <h3 className="text-lg font-semibold mb-2">No Past Tests</h3>
+                  <p className="text-muted-foreground">Completed tests will appear here</p>
+                </Card>
+              ) : (
+                courseLiveTests.filter(t => t.status === 'completed').map(test => {
+                  const myResult = liveTestResults.find(r => r.testId === test.id)
+                  return (
+                    <Card key={test.id} className="p-4">
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <h3 className="font-semibold">{test.title}</h3>
+                          <p className="text-sm text-muted-foreground">
+                            {test.endedAt ? new Date(test.endedAt).toLocaleDateString() : ''} • {test.questionCount} questions
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          {myResult ? (
+                            <div className={`text-2xl font-bold ${myResult.score >= 80 ? 'text-green-500' : myResult.score >= 50 ? 'text-yellow-500' : 'text-red-500'}`}>
+                              {myResult.score}%
+                            </div>
+                          ) : (
+                            <span className="text-sm text-muted-foreground">Not attempted</span>
+                          )}
+                        </div>
+                      </div>
+                      
+                      {myResult && test.showSolution && (
+                        <div className="flex gap-2 mt-3">
+                          <Button 
+                            size="sm" 
+                            variant="outline"
+                            onClick={() => {
+                              setViewingLiveTestResult(myResult)
+                              setViewingLiveTestSolutions(true)
+                            }}
+                          >
+                            <Eye className="h-4 w-4 mr-1" /> View Solutions
+                          </Button>
+                        </div>
+                      )}
+                    </Card>
+                  )
+                })
+              )}
+            </div>
+          )}
+
+          {/* My Results Tab */}
+          {liveTestTab === 'results' && (
+            <div className="space-y-4">
+              {viewingLiveTestResult ? (
+                <Card className="p-4">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="font-semibold">Test Result</h3>
+                    <Button variant="outline" size="sm" onClick={() => setViewingLiveTestResult(null)}>
+                      <X className="h-4 w-4 mr-1" /> Close
+                    </Button>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                    <div className="text-center p-3 bg-muted rounded">
+                      <div className={`text-2xl font-bold ${viewingLiveTestResult.score >= 80 ? 'text-green-500' : viewingLiveTestResult.score >= 50 ? 'text-yellow-500' : 'text-red-500'}`}>
+                        {viewingLiveTestResult.score}%
+                      </div>
+                      <p className="text-xs text-muted-foreground">Score</p>
+                    </div>
+                    <div className="text-center p-3 bg-muted rounded">
+                      <div className="text-2xl font-bold text-green-500">{viewingLiveTestResult.correct}</div>
+                      <p className="text-xs text-muted-foreground">Correct</p>
+                    </div>
+                    <div className="text-center p-3 bg-muted rounded">
+                      <div className="text-2xl font-bold text-red-500">{viewingLiveTestResult.wrong}</div>
+                      <p className="text-xs text-muted-foreground">Wrong</p>
+                    </div>
+                    <div className="text-center p-3 bg-muted rounded">
+                      <div className="text-2xl font-bold">{Math.floor(viewingLiveTestResult.timeTaken / 60)}:{String(viewingLiveTestResult.timeTaken % 60).padStart(2, '0')}</div>
+                      <p className="text-xs text-muted-foreground">Time</p>
+                    </div>
+                  </div>
+                  
+                  <Button 
+                    onClick={() => setViewingLiveTestSolutions(true)} 
+                    className="w-full"
+                  >
+                    <Eye className="h-4 w-4 mr-2" /> View Solutions
+                  </Button>
+                </Card>
+              ) : (
+                <Card className="p-4">
+                  <CardHeader className="p-0 pb-3">
+                    <CardTitle>My Live Test Results</CardTitle>
+                  </CardHeader>
+                  <CardContent className="p-0">
+                    {liveTestResults.filter(r => r.courseId === activeCourseId).length === 0 ? (
+                      <p className="text-muted-foreground text-center py-4">No results yet. Take a live test!</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {liveTestResults
+                          .filter(r => r.courseId === activeCourseId)
+                          .sort((a, b) => b.submittedAt - a.submittedAt)
+                          .map(result => {
+                            const test = liveTests.find(t => t.id === result.testId)
+                            return (
+                              <div 
+                                key={result.id} 
+                                className="flex items-center justify-between p-3 border rounded hover:bg-muted/50 cursor-pointer"
+                                onClick={() => setViewingLiveTestResult(result)}
+                              >
+                                <div>
+                                  <p className="font-medium">{test?.title || 'Auto Test'}</p>
+                                  <p className="text-xs text-muted-foreground">
+                                    {new Date(result.submittedAt).toLocaleDateString()} • {result.correct}/{result.total} correct
+                                  </p>
+                                </div>
+                                <div className="flex items-center gap-3">
+                                  <div className={`text-xl font-bold ${result.score >= 80 ? 'text-green-500' : result.score >= 50 ? 'text-yellow-500' : 'text-red-500'}`}>
+                                    {result.score}%
+                                  </div>
+                                  {test?.showSolution && (
+                                    <Button 
+                                      size="sm" 
+                                      variant="outline"
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        setViewingLiveTestResult(result)
+                                        setViewingLiveTestSolutions(true)
+                                      }}
+                                    >
+                                      <Eye className="h-4 w-4" />
+                                    </Button>
+                                  )}
+                                </div>
+                              </div>
+                            )
+                          })}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
+            </div>
           )}
         </TabsContent>
 
@@ -1017,6 +1658,366 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
                 />
               </div>
             </div>
+          </Card>
+
+          {/* Live Test Management - Same as Group Study */}
+          <Card className="p-4">
+            <h3 className="font-semibold mb-3 flex items-center gap-2">
+              <Clock className="h-5 w-5" />
+              Live Test Management
+            </h3>
+            
+            {/* Schedule / Auto Daily Tabs - using buttons instead of nested Tabs */}
+            <div className="flex gap-1 p-1 bg-muted rounded-lg mb-4">
+              <button
+                onClick={() => setSettingsLiveTestTab('schedule')}
+                className={`flex-1 py-2 px-4 rounded text-sm font-medium transition-all ${
+                  settingsLiveTestTab === 'schedule'
+                    ? 'bg-background shadow'
+                    : 'hover:bg-background/50'
+                }`}
+              >
+                Schedule
+              </button>
+              <button
+                onClick={() => setSettingsLiveTestTab('auto-daily')}
+                className={`flex-1 py-2 px-4 rounded text-sm font-medium transition-all ${
+                  settingsLiveTestTab === 'auto-daily'
+                    ? 'bg-background shadow'
+                    : 'hover:bg-background/50'
+                }`}
+              >
+                Auto Daily
+              </button>
+            </div>
+            
+            {/* Schedule Tab Content */}
+            {settingsLiveTestTab === 'schedule' && (
+              <div className="space-y-4">
+                {showCreateLiveTest ? (
+                  <div className="p-4 border rounded-lg bg-muted/30 space-y-4">
+                    <div className="flex justify-between items-center">
+                      <h4 className="font-medium">Create New Test</h4>
+                      <Button variant="ghost" size="sm" onClick={() => setShowCreateLiveTest(false)}>
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
+                    
+                    <div>
+                      <label className="text-sm font-medium">Test Title *</label>
+                      <Input 
+                        placeholder="e.g., Weekly Quiz #1"
+                        value={newLiveTestTitle}
+                        onChange={e => setNewLiveTestTitle(e.target.value)}
+                      />
+                    </div>
+                    
+                    <div>
+                      <label className="text-sm font-medium mb-2 block">Select Chapters (optional)</label>
+                      <div className="border rounded-lg p-3 max-h-40 overflow-y-auto space-y-2">
+                        <label className="flex items-center gap-2 p-2 hover:bg-muted rounded cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={newLiveTestCategories.length === 0}
+                            onChange={() => setNewLiveTestCategories([])}
+                            className="h-4 w-4"
+                          />
+                          <span className="text-sm font-medium">All Chapters ({courseMCQList.length} MCQs)</span>
+                        </label>
+                        {courseTopics.map(topic => {
+                          const count = courseMCQList.filter(q => q.categoryId === topic.id).length
+                          const isChecked = newLiveTestCategories.includes(topic.id)
+                          return (
+                            <label key={topic.id} className="flex items-center gap-2 p-2 hover:bg-muted rounded cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={e => {
+                                  if (e.target.checked) {
+                                    setNewLiveTestCategories([...newLiveTestCategories, topic.id])
+                                  } else {
+                                    setNewLiveTestCategories(newLiveTestCategories.filter(id => id !== topic.id))
+                                  }
+                                }}
+                                className="h-4 w-4"
+                              />
+                              <span className="text-sm">{topic.name} ({count})</span>
+                            </label>
+                          )
+                        })}
+                      </div>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-sm font-medium">Test Duration</label>
+                        <Select value={newLiveTestDuration} onValueChange={setNewLiveTestDuration}>
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="15">15 minutes</SelectItem>
+                            <SelectItem value="30">30 minutes</SelectItem>
+                            <SelectItem value="45">45 minutes</SelectItem>
+                            <SelectItem value="60">60 minutes</SelectItem>
+                            <SelectItem value="90">90 minutes</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <label className="text-sm font-medium">Questions Count</label>
+                        <Select value={newLiveTestQuestionCount} onValueChange={setNewLiveTestQuestionCount}>
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="10">10 Questions</SelectItem>
+                            <SelectItem value="20">20 Questions</SelectItem>
+                            <SelectItem value="30">30 Questions</SelectItem>
+                            <SelectItem value="50">50 Questions</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                    
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm">Show solutions after test</span>
+                      <input 
+                        type="checkbox" 
+                        checked={newLiveTestShowSolution}
+                        onChange={e => setNewLiveTestShowSolution(e.target.checked)}
+                        className="h-4 w-4"
+                      />
+                    </div>
+                    
+                    <Button onClick={handleCreateLiveTest} className="w-full">
+                      <Plus className="h-4 w-4 mr-2" /> Create Test
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <Button onClick={() => setShowCreateLiveTest(true)} className="w-full">
+                      <Plus className="h-4 w-4 mr-2" /> Create New Test
+                    </Button>
+                    
+                    {/* Scheduled Tests List */}
+                    {courseLiveTests.filter(t => t.status === 'scheduled').length > 0 ? (
+                      <div className="space-y-2">
+                        <h4 className="text-sm font-medium text-muted-foreground">Scheduled Tests</h4>
+                        {courseLiveTests
+                          .filter(t => t.status === 'scheduled')
+                          .map(test => (
+                          <div key={test.id} className="flex items-center justify-between p-3 border rounded">
+                            <div>
+                              <p className="font-medium">{test.title}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {test.questionCount} questions • {test.duration} min
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs px-2 py-1 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
+                                Ready
+                              </span>
+                              <Button 
+                                variant="ghost" 
+                                size="sm"
+                                onClick={() => {
+                                  if (confirm('Delete this test?')) {
+                                    removeLiveTest(test.id)
+                                  }
+                                }}
+                              >
+                                <Trash2 className="h-4 w-4 text-red-500" />
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground text-center py-4">
+                        No scheduled tests. Create one above!
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+            
+            {/* Auto Daily Tab Content */}
+            {settingsLiveTestTab === 'auto-daily' && (
+              <div className="space-y-4">
+                {/* Enable Toggle */}
+                <div className="flex items-center justify-between p-4 border rounded-lg bg-muted/30">
+                  <div>
+                    <h4 className="font-medium">Enable Auto Daily Test</h4>
+                    <p className="text-sm text-muted-foreground">
+                      Practice with a new test every day at the specified time
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={autoTestEnabled}
+                    onChange={e => setAutoTestEnabled(e.target.checked)}
+                    className="h-5 w-5"
+                  />
+                </div>
+                
+                {/* Config Form */}
+                <div className={`space-y-4 ${!autoTestEnabled ? 'opacity-50 pointer-events-none' : ''}`}>
+                  <div>
+                    <label className="text-sm font-medium">Test Title</label>
+                    <Input
+                      value={autoTestTitle}
+                      onChange={e => setAutoTestTitle(e.target.value)}
+                      placeholder="Daily Practice Test"
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="text-sm font-medium mb-2 block">Select Chapters</label>
+                    <div className="border rounded-lg p-3 max-h-40 overflow-y-auto space-y-2">
+                      {courseTopics.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">Add chapters first.</p>
+                      ) : (
+                        <>
+                          <label className="flex items-center gap-2 p-2 hover:bg-muted rounded cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={autoTestCategories.length === 0}
+                              onChange={() => setAutoTestCategories([])}
+                              className="h-4 w-4"
+                            />
+                            <span className="text-sm font-medium">All Chapters ({courseMCQList.length})</span>
+                          </label>
+                          {courseTopics.map(topic => {
+                            const count = courseMCQList.filter(q => q.categoryId === topic.id).length
+                            const isChecked = autoTestCategories.includes(topic.id)
+                            return (
+                              <label key={topic.id} className="flex items-center gap-2 p-2 hover:bg-muted rounded cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={e => {
+                                    if (e.target.checked) {
+                                      setAutoTestCategories([...autoTestCategories, topic.id])
+                                    } else {
+                                      setAutoTestCategories(autoTestCategories.filter(id => id !== topic.id))
+                                    }
+                                  }}
+                                  className="h-4 w-4"
+                                />
+                                <span className="text-sm">{topic.name} ({count})</span>
+                              </label>
+                            )
+                          })}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-sm font-medium">Daily Start Time</label>
+                      <Input
+                        type="time"
+                        value={autoTestStartTime}
+                        onChange={e => setAutoTestStartTime(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium">Daily End Time</label>
+                      <Input
+                        type="time"
+                        value={autoTestEndTime}
+                        onChange={e => setAutoTestEndTime(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-sm font-medium">Test Duration</label>
+                      <Select value={autoTestDuration} onValueChange={setAutoTestDuration}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="15">15 minutes</SelectItem>
+                          <SelectItem value="30">30 minutes</SelectItem>
+                          <SelectItem value="45">45 minutes</SelectItem>
+                          <SelectItem value="60">60 minutes</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium">Questions Count</label>
+                      <Select value={autoTestQuestionCount} onValueChange={setAutoTestQuestionCount}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="10">10 Questions</SelectItem>
+                          <SelectItem value="20">20 Questions</SelectItem>
+                          <SelectItem value="30">30 Questions</SelectItem>
+                          <SelectItem value="50">50 Questions</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  
+                  <div>
+                    <label className="text-sm font-medium mb-2 block">Active Days</label>
+                    <div className="flex flex-wrap gap-2">
+                      {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, idx) => (
+                        <button
+                          key={day}
+                          onClick={() => {
+                            if (autoTestDays.includes(idx)) {
+                              setAutoTestDays(autoTestDays.filter(d => d !== idx))
+                            } else {
+                              setAutoTestDays([...autoTestDays, idx])
+                            }
+                          }}
+                          className={`px-3 py-1 rounded text-sm ${
+                            autoTestDays.includes(idx)
+                              ? 'bg-primary text-primary-foreground'
+                              : 'bg-muted hover:bg-muted/80'
+                          }`}
+                        >
+                          {day}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm">Show solutions after test</span>
+                    <input
+                      type="checkbox"
+                      checked={autoTestShowSolution}
+                      onChange={e => setAutoTestShowSolution(e.target.checked)}
+                      className="h-4 w-4"
+                    />
+                  </div>
+                </div>
+                
+                <Button onClick={handleSaveAutoTestConfig} className="w-full">
+                  <Check className="h-4 w-4 mr-2" />
+                  Save Auto Test Settings
+                </Button>
+                
+                {autoTestEnabled && currentAutoTestConfig && (
+                  <div className="p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
+                    <p className="text-sm font-medium text-green-700 dark:text-green-400">
+                      ✓ Auto Test Active
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Runs daily from {currentAutoTestConfig.startTime} to {currentAutoTestConfig.endTime}
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
           </Card>
 
           <Card className="p-4 border-destructive/50">

@@ -21,7 +21,8 @@ import type {
   PersonalMCQ,
   PersonalQuizResult,
   PersonalLiveTest,
-  PersonalLiveTestResult
+  PersonalLiveTestResult,
+  PersonalAutoLiveTestConfig
 } from '@/types'
 
 // Legacy types for backward compatibility (will be migrated)
@@ -84,6 +85,7 @@ interface PersonalState {
   quizResults: PersonalQuizResult[]
   liveTests: PersonalLiveTest[]
   liveTestResults: PersonalLiveTestResult[]
+  autoLiveTestConfigs: PersonalAutoLiveTestConfig[]
   
   activeCourseId: string | null
   
@@ -130,6 +132,10 @@ interface PersonalState {
   // Live Test Result Actions
   addLiveTestResult: (result: PersonalLiveTestResult) => void
   getLiveTestResultsByTest: (testId: string) => PersonalLiveTestResult[]
+  
+  // Auto Live Test Config Actions
+  setAutoLiveTestConfig: (config: PersonalAutoLiveTestConfig) => void
+  getAutoLiveTestConfig: (courseId: string) => PersonalAutoLiveTestConfig | undefined
   
   // Helper Functions
   getActiveCourse: () => PersonalCourse | undefined
@@ -187,6 +193,7 @@ export const usePersonalStore = create<PersonalState>()(
       quizResults: [],
       liveTests: [],
       liveTestResults: [],
+      autoLiveTestConfigs: [],
       activeCourseId: null,
       
       // Course Actions
@@ -420,6 +427,22 @@ export const usePersonalStore = create<PersonalState>()(
       
       getLiveTestResultsByTest: (testId) => {
         return get().liveTestResults.filter(ltr => ltr.testId === testId)
+      },
+      
+      // Auto Live Test Config Actions
+      setAutoLiveTestConfig: async (config) => {
+        set(state => ({
+          autoLiveTestConfigs: state.autoLiveTestConfigs.some(c => c.courseId === config.courseId)
+            ? state.autoLiveTestConfigs.map(c => c.courseId === config.courseId ? config : c)
+            : [...state.autoLiveTestConfigs, config]
+        }))
+        try {
+          await setDoc(doc(db, 'personal-auto-test-configs', config.id), config)
+        } catch (e) { console.error('Error saving auto test config:', e) }
+      },
+      
+      getAutoLiveTestConfig: (courseId) => {
+        return get().autoLiveTestConfigs.find(c => c.courseId === courseId)
       },
       
       // Helper Functions

@@ -1082,6 +1082,23 @@ export interface PersonalLiveTestResult {
   submittedAt: number
 }
 
+export interface PersonalAutoLiveTestConfig {
+  id: string
+  courseId: string
+  userId: string
+  enabled: boolean
+  title: string
+  categoryIds: string[]  // Topic IDs for question selection
+  startTime: string  // Format: "HH:mm"
+  endTime: string    // Format: "HH:mm"
+  duration: number   // minutes
+  questionCount: number
+  activeDays: number[]  // 0-6, Sunday = 0
+  showSolution: boolean
+  createdAt: number
+  updatedAt: number
+}
+
 // ==================== NOTIFICATION SYSTEM ====================
 
 export interface UserNotification {
