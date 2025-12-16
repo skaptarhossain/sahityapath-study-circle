@@ -24,6 +24,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useCoachingStore } from '@/stores/coaching-store'
 import { useLibraryStore } from '@/stores/library-store'
+import { useAssetStore } from '@/stores/asset-store'
 import { useAuthStore } from '@/stores/auth-store'
 import { db } from '@/config/firebase'
 import { collection, doc, getDocs, query, setDoc, where } from 'firebase/firestore'
@@ -82,7 +83,7 @@ export function QuestionBankManager({ courseId }: QuestionBankManagerProps) {
     hasDownloaded: hasLibraryDownloaded,
   } = useLibraryStore()
 
-  const [questionBankTab, setQuestionBankTab] = useState<'single' | 'group' | 'instant' | 'assets'>('single')
+  const [questionBankTab, setQuestionBankTab] = useState<'single' | 'group' | 'instant'>('single')
 
   // Hierarchy selection for creating categories
   const [selectedSubject, setSelectedSubject] = useState('')
@@ -92,18 +93,6 @@ export function QuestionBankManager({ courseId }: QuestionBankManagerProps) {
 
   const [categories, setCategories] = useState<QuestionCategory[]>([])
   const [expandedCategories, setExpandedCategories] = useState<string[]>([])
-
-  // Asset Library
-  const [assets, setAssets] = useState<AssetLibraryItem[]>([])
-  const [assetTitle, setAssetTitle] = useState('')
-  const [assetType, setAssetType] = useState<'note' | 'quiz' | 'link'>('note')
-  const [assetUrl, setAssetUrl] = useState('')
-  const [assetDescription, setAssetDescription] = useState('')
-  const [assetSubtopic, setAssetSubtopic] = useState('')
-  const [assetFilterSubject, setAssetFilterSubject] = useState<string>('')
-  const [assetFilterTopic, setAssetFilterTopic] = useState<string>('')
-  const [assetFilterType, setAssetFilterType] = useState<'all' | 'note' | 'quiz' | 'link'>('all')
-  const [assetSearch, setAssetSearch] = useState('')
 
   // Single question form
   const [qbQuestion, setQbQuestion] = useState('')
@@ -117,6 +106,8 @@ export function QuestionBankManager({ courseId }: QuestionBankManagerProps) {
     question: string
     options: string[]
     correctIndex: number
+    explanation?: string
+    difficulty?: 'easy' | 'medium' | 'hard'
   }>>([])
   const [groupUploadCategory, setGroupUploadCategory] = useState('')
   const [groupUploadLoading, setGroupUploadLoading] = useState(false)
@@ -128,6 +119,8 @@ export function QuestionBankManager({ courseId }: QuestionBankManagerProps) {
     question: string
     options: string[]
     correctIndex: number
+    explanation?: string
+    difficulty?: 'easy' | 'medium' | 'hard'
   }>>([])
   const [jsonParseError, setJsonParseError] = useState('')
   const [jsonUploadMode, setJsonUploadMode] = useState<'file' | 'text'>('file')
@@ -163,43 +156,12 @@ export function QuestionBankManager({ courseId }: QuestionBankManagerProps) {
       }
     }
 
-    const loadAssets = async () => {
-      try {
-        const assetQuery = query(
-          collection(db, 'coaching-assets'),
-          where('courseId', '==', courseId || 'global')
-        )
-        const snapshot = await getDocs(assetQuery)
-        const loaded = snapshot.docs.map(doc => doc.data() as AssetLibraryItem)
-        if (loaded.length) {
-          setAssets(loaded.sort((a, b) => b.createdAt - a.createdAt))
-        }
-      } catch (error) {
-        console.error('Error loading assets', error)
-      }
-    }
-
     loadCategories()
-    loadAssets()
   }, [courseId])
 
   const topicOptions = useMemo(() => {
     return selectedSubject ? libraryTopics.filter(t => t.subjectId === selectedSubject && t.isActive) : []
   }, [selectedSubject, libraryTopics])
-
-  const assetTopicOptions = useMemo(() => {
-    return assetFilterSubject ? libraryTopics.filter(t => t.subjectId === assetFilterSubject && t.isActive) : libraryTopics.filter(t => t.isActive)
-  }, [assetFilterSubject, libraryTopics])
-
-  const filteredAssets = useMemo(() => {
-    return assets.filter(asset => {
-      if (assetFilterSubject && asset.subjectId !== assetFilterSubject) return false
-      if (assetFilterTopic && asset.topicId !== assetFilterTopic) return false
-      if (assetFilterType !== 'all' && asset.type !== assetFilterType) return false
-      if (assetSearch && !asset.title.toLowerCase().includes(assetSearch.toLowerCase())) return false
-      return true
-    })
-  }, [assets, assetFilterSubject, assetFilterTopic, assetFilterType, assetSearch])
 
   const categoryLabel = (cat: QuestionCategory) => {
     const subject = librarySubjects.find(s => s.id === cat.subjectId)
@@ -246,12 +208,29 @@ export function QuestionBankManager({ courseId }: QuestionBankManagerProps) {
     }
   }
 
+  // Get Asset store function for syncing
+  const { addSingleMCQ: addAssetMCQ } = useAssetStore()
+
   const handleAddQuestion = async () => {
     if (!qbQuestion.trim() || !qbCategoryId || !user) return
     if (qbOptions.some(o => !o.trim())) {
       alert('Please fill all options')
       return
     }
+
+    // First add to Asset Library for centralized storage
+    const { assetId, questionId } = addAssetMCQ(
+      qbQuestion.trim(),
+      qbOptions.map(o => o.trim()),
+      qbCorrect,
+      user.id,
+      'coaching-subject',  // default subject
+      'coaching-topic',    // default topic
+      undefined,           // explanation
+      'medium',           // difficulty
+      undefined            // subtopicId
+    )
+
     const mcq: CourseMCQ = {
       id: uuidv4(),
       courseId: courseId || '',
@@ -268,6 +247,7 @@ export function QuestionBankManager({ courseId }: QuestionBankManagerProps) {
     ;(mcq as any).createdBy = user.id
     ;(mcq as any).createdByName = user.displayName
     ;(mcq as any).createdAt = Date.now()
+    ;(mcq as any).assetRef = `${assetId}:${questionId}`  // Store reference to Asset Library
 
     addMCQ(mcq)
     setQbQuestion('')
@@ -401,7 +381,7 @@ export function QuestionBankManager({ courseId }: QuestionBankManagerProps) {
         setJsonParseError('JSON must be an array of questions')
         return
       }
-      const questions: Array<{ question: string; options: string[]; correctIndex: number }> = []
+      const questions: Array<{ question: string; options: string[]; correctIndex: number; explanation?: string; difficulty?: 'easy' | 'medium' | 'hard' }> = []
       for (const item of parsed) {
         const question = item.question || item.q || item.text || ''
         const options = item.options || item.opts || item.choices || []
@@ -417,8 +397,18 @@ export function QuestionBankManager({ courseId }: QuestionBankManagerProps) {
           else if (c === 'C' || c === '3') correctIndex = 2
           else if (c === 'D' || c === '4') correctIndex = 3
         }
+        // Parse explanation
+        const explanation = item.explanation || item.exp || item.explain || item.solution || ''
+        // Parse difficulty
+        let difficulty: 'easy' | 'medium' | 'hard' | undefined = undefined
+        if (item.difficulty || item.diff || item.level) {
+          const d = (item.difficulty || item.diff || item.level || '').toLowerCase()
+          if (d === 'easy' || d === 'e' || d === '1') difficulty = 'easy'
+          else if (d === 'medium' || d === 'm' || d === '2' || d === 'moderate') difficulty = 'medium'
+          else if (d === 'hard' || d === 'h' || d === '3' || d === 'difficult') difficulty = 'hard'
+        }
         if (question && options.length >= 4) {
-          questions.push({ question, options: options.slice(0, 4), correctIndex })
+          questions.push({ question, options: options.slice(0, 4), correctIndex, explanation: explanation || undefined, difficulty })
         }
       }
       if (questions.length === 0) {
@@ -454,7 +444,7 @@ export function QuestionBankManager({ courseId }: QuestionBankManagerProps) {
     }
   }
 
-  const saveParsedQuestions = async (items: Array<{ question: string; options: string[]; correctIndex: number }>) => {
+  const saveParsedQuestions = async (items: Array<{ question: string; options: string[]; correctIndex: number; explanation?: string; difficulty?: 'easy' | 'medium' | 'hard' }>) => {
     if (!groupUploadCategory || !user || items.length === 0) return
     setGroupUploadLoading(true)
     try {
@@ -468,13 +458,16 @@ export function QuestionBankManager({ courseId }: QuestionBankManagerProps) {
           correctIndex: q.correctIndex,
           marks: 1,
           negativeMarks: 0,
-          difficulty: 'medium',
+          difficulty: q.difficulty || 'medium',
           order: mcqs.length,
         }
         ;(mcq as any).categoryId = groupUploadCategory
         ;(mcq as any).createdBy = user.id
         ;(mcq as any).createdByName = user.displayName
         ;(mcq as any).createdAt = Date.now()
+        if (q.explanation) {
+          ;(mcq as any).explanation = q.explanation
+        }
         addMCQ(mcq)
         await setDoc(doc(db, 'coaching-mcqs', mcq.id), mcq)
       }
@@ -592,61 +585,6 @@ export function QuestionBankManager({ courseId }: QuestionBankManagerProps) {
     setEditingQuestion(null)
   }
 
-  const handleAddAsset = async () => {
-    if (!selectedSubject || !selectedTopic) {
-      alert('Select Subject and Topic first')
-      return
-    }
-    if (!assetTitle.trim()) {
-      alert('Enter asset title')
-      return
-    }
-    if (assetType === 'link' && !assetUrl.trim()) {
-      alert('Add a link URL for this asset')
-      return
-    }
-
-    const asset: AssetLibraryItem = {
-      id: uuidv4(),
-      title: assetTitle.trim(),
-      type: assetType,
-      url: assetUrl.trim() || undefined,
-      description: assetDescription.trim() || undefined,
-      subjectId: selectedSubject,
-      topicId: selectedTopic,
-      subtopic: assetSubtopic.trim() || undefined,
-      createdAt: Date.now(),
-      createdBy: user?.id,
-      createdByName: user?.displayName,
-    }
-
-    setAssets(prev => [asset, ...prev])
-    setAssetTitle('')
-    setAssetUrl('')
-    setAssetDescription('')
-    setAssetSubtopic('')
-
-    try {
-      await setDoc(doc(db, 'coaching-assets', asset.id), {
-        ...asset,
-        courseId: courseId || 'global',
-        userId: user?.id,
-      })
-    } catch (err) {
-      console.error('Error saving asset:', err)
-    }
-  }
-
-  const handleDeleteAsset = async (id: string) => {
-    if (!confirm('Delete this asset?')) return
-    setAssets(prev => prev.filter(a => a.id !== id))
-    try {
-      await setDoc(doc(db, 'coaching-assets', id), { deleted: true }, { merge: true })
-    } catch (err) {
-      console.error('Error deleting asset:', err)
-    }
-  }
-
   const handleDeleteQuestion = async (id: string) => {
     if (!confirm('Delete this question?')) return
     removeMCQ(id)
@@ -711,7 +649,7 @@ export function QuestionBankManager({ courseId }: QuestionBankManagerProps) {
 
       {/* Tabs */}
       <div className="flex gap-1 p-1 bg-muted rounded-lg">
-        {['single','group','instant','assets'].map(tab => (
+        {['single','group','instant'].map(tab => (
           <button
             key={tab}
             onClick={() => setQuestionBankTab(tab as any)}
@@ -720,7 +658,6 @@ export function QuestionBankManager({ courseId }: QuestionBankManagerProps) {
             {tab === 'single' && '✏️ Single'}
             {tab === 'group' && '📋 Group'}
             {tab === 'instant' && '⚡ Instant'}
-            {tab === 'assets' && '📚 Assets'}
           </button>
         ))}
       </div>
@@ -759,12 +696,12 @@ export function QuestionBankManager({ courseId }: QuestionBankManagerProps) {
           </div>
 
           <div className="text-xs bg-white dark:bg-gray-900 p-3 rounded border space-y-2">
-            <p className="font-medium">📄 Excel Format (6 columns):</p>
-            <p className="text-muted-foreground pl-2">Question | Option 1 | Option 2 | Option 3 | Option 4 | Correct (1/2/3/4)</p>
+            <p className="font-medium">📄 Excel Format (8 columns):</p>
+            <p className="text-muted-foreground pl-2">Question | Option 1 | Option 2 | Option 3 | Option 4 | Correct (1/2/3/4) | Explanation | Difficulty (easy/medium/hard)</p>
             <p className="font-medium mt-2">📝 Word Format:</p>
-            <div className="text-muted-foreground pl-2 whitespace-pre-line">{`1. Question\n1) Option 1\n2) Option 2\n3) Option 3\n4) Option 4\nAns: 1`}</div>
+            <div className="text-muted-foreground pl-2 whitespace-pre-line">{`1. Question\n1) Option 1\n2) Option 2\n3) Option 3\n4) Option 4\nAns: 1\nExp: Explanation here\nDiff: medium`}</div>
             <p className="font-medium mt-2">📦 JSON Array Format:</p>
-            <div className="text-muted-foreground pl-2 text-[10px] font-mono">[{`{"question":"Q1","options":["A","B","C","D"],"correctIndex":0}`}]</div>
+            <div className="text-muted-foreground pl-2 text-[10px] font-mono">[{`{"question":"Q1","options":["A","B","C","D"],"correctIndex":0,"explanation":"ব্যাখ্যা","difficulty":"medium"}`}]</div>
           </div>
 
           <div className="flex gap-2 p-1 bg-muted rounded">
@@ -970,109 +907,6 @@ export function QuestionBankManager({ courseId }: QuestionBankManagerProps) {
               </Button>
             </div>
           )}
-        </div>
-      )}
-
-      {/* Assets */}
-      {questionBankTab === 'assets' && (
-        <div className="space-y-4 p-3 border rounded-lg bg-muted/30">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <BookOpen className="h-5 w-5 text-indigo-500" />
-              <div>
-                <p className="text-sm font-semibold">Asset Library</p>
-                <p className="text-xs text-muted-foreground">Store Notes, Quizzes, Links by Subject &gt; Topic &gt; Subtopic</p>
-              </div>
-            </div>
-            <div className="text-xs text-muted-foreground">{assets.length} items</div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-            <Select value={assetFilterSubject || '__all__'} onValueChange={v => { setAssetFilterSubject(v === '__all__' ? '' : v); setAssetFilterTopic('') }}>
-              <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="Filter by Subject" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__all__">All Subjects</SelectItem>
-                {librarySubjects.map(s => (
-                  <SelectItem key={s.id} value={s.id}>{s.icon} {s.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={assetFilterTopic || '__all__'} onValueChange={v => setAssetFilterTopic(v === '__all__' ? '' : v)} disabled={!assetFilterSubject}>
-              <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="Filter by Topic" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__all__">All Topics</SelectItem>
-                {assetTopicOptions.map(t => (
-                  <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={assetFilterType} onValueChange={v => setAssetFilterType(v as any)}>
-              <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="Filter by Type" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Types</SelectItem>
-                <SelectItem value="note">Notes</SelectItem>
-                <SelectItem value="quiz">Quiz</SelectItem>
-                <SelectItem value="link">Link</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-            <Input value={assetSearch} onChange={e => setAssetSearch(e.target.value)} placeholder="Search assets..." className="h-9 text-sm" />
-            <p className="text-[11px] text-muted-foreground flex items-center gap-1"><FolderPlus className="h-4 w-4" /> Use Subject/Topic selectors above to add a new asset.</p>
-          </div>
-
-          <div className="p-3 border rounded bg-background space-y-2">
-            <p className="text-sm font-medium flex items-center gap-2"><FolderPlus className="h-4 w-4" />Add Asset</p>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-              <Input value={assetTitle} onChange={e => setAssetTitle(e.target.value)} placeholder="Title (e.g., Heredity Notes)" className="h-9 text-sm" />
-              <Select value={assetType} onValueChange={v => setAssetType(v as any)}>
-                <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="Type" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="note">Note</SelectItem>
-                  <SelectItem value="quiz">Quiz</SelectItem>
-                  <SelectItem value="link">Link</SelectItem>
-                </SelectContent>
-              </Select>
-              <Input value={assetSubtopic} onChange={e => setAssetSubtopic(e.target.value)} placeholder="Subtopic (optional)" className="h-9 text-sm" />
-              {assetType === 'link' && (
-                <Input value={assetUrl} onChange={e => setAssetUrl(e.target.value)} placeholder="Link URL" className="h-9 text-sm" />
-              )}
-            </div>
-            <Textarea value={assetDescription} onChange={e => setAssetDescription(e.target.value)} rows={2} className="text-sm" placeholder="Short description or note content" />
-            <div className="flex flex-wrap gap-2 items-center">
-              <Button size="sm" onClick={handleAddAsset}><Plus className="h-4 w-4 mr-1" /> Save Asset</Button>
-              <span className="text-[11px] text-muted-foreground">Make sure Subject &amp; Topic are selected in the top bar.</span>
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            {filteredAssets.length === 0 ? (
-              <div className="text-center py-6 text-muted-foreground text-sm">No assets yet. Add one using the form above.</div>
-            ) : (
-              filteredAssets.map(asset => {
-                const subject = librarySubjects.find(s => s.id === asset.subjectId)
-                const topic = libraryTopics.find(t => t.id === asset.topicId)
-                const typeColor = asset.type === 'note' ? 'bg-indigo-100 text-indigo-700' : asset.type === 'quiz' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
-                return (
-                  <div key={asset.id} className="p-3 border rounded-lg bg-white dark:bg-gray-900 shadow-sm">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className={`text-[10px] px-2 py-0.5 rounded ${typeColor} capitalize`}>{asset.type}</span>
-                          <p className="font-semibold text-sm truncate" title={asset.title}>{asset.title}</p>
-                        </div>
-                        <p className="text-[11px] text-muted-foreground mt-1">{subject?.name} &gt; {topic?.name}{asset.subtopic ? ` • ${asset.subtopic}` : ''}</p>
-                        {asset.description && <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{asset.description}</p>}
-                        {asset.url && <a href={asset.url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline inline-flex items-center gap-1 mt-1"><Link2 className="h-3 w-3" />Open link</a>}
-                      </div>
-                      <Button variant="ghost" size="sm" onClick={() => handleDeleteAsset(asset.id)} className="h-7 w-7 p-0 text-red-500"><Trash2 className="h-3.5 w-3.5" /></Button>
-                    </div>
-                  </div>
-                )
-              })
-            )}
-          </div>
         </div>
       )}
 

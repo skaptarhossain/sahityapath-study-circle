@@ -42,13 +42,14 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useCoachingStore } from '@/stores/coaching-store';
 import { useLibraryStore } from '@/stores/library-store';
+import { useAssetStore } from '@/stores/asset-store';
 import { useAuthStore } from '@/stores/auth-store';
 import { db } from '@/config/firebase';
 import { collection, doc, getDocs, query, setDoc, where } from 'firebase/firestore';
 import { v4 as uuidv4 } from 'uuid';
 import ReactQuill from 'react-quill';
 import 'react-quill/dist/quill.snow.css';
-import type { InlineSection, InlineLesson, InlineMCQ } from '@/types';
+import type { InlineSection, InlineLesson, InlineMCQ, AnyAsset } from '@/types';
 
 // Asset item stored in Firestore
 interface CourseAsset {
@@ -136,6 +137,23 @@ export function CourseContentManager({ courseId, onBack }: CourseContentManagerP
   const [assetFilterTopic, setAssetFilterTopic] = useState('');
   const [loadingAssets, setLoadingAssets] = useState(false);
   const [targetSectionForAsset, setTargetSectionForAsset] = useState<string | null>(null);
+  
+  // Personal Asset Library state
+  const [showPersonalLibrary, setShowPersonalLibrary] = useState(false);
+  const [selectedPersonalAssets, setSelectedPersonalAssets] = useState<string[]>([]);
+  const [personalAssetFilterType, setPersonalAssetFilterType] = useState<'all' | 'mcq' | 'note'>('all');
+  
+  // Personal Asset Store
+  const {
+    subjects: personalSubjects,
+    topics: personalTopics,
+    assets: personalAssets,
+    selectedSubjectId: personalSelectedSubject,
+    selectedTopicId: personalSelectedTopic,
+    setSelectedSubject: setPersonalSelectedSubject,
+    setSelectedTopic: setPersonalSelectedTopic,
+    getTopicsBySubject: getPersonalTopicsBySubject,
+  } = useAssetStore();
 
   // Load assets from Firestore
   useEffect(() => {
@@ -277,6 +295,22 @@ export function CourseContentManager({ courseId, onBack }: CourseContentManagerP
     updateCourse({ ...course, sections: updatedSections });
   };
 
+  const handleMoveSectionUp = (sectionIndex: number) => {
+    if (sectionIndex === 0) return;
+    const newSections = [...sections];
+    [newSections[sectionIndex - 1], newSections[sectionIndex]] = [newSections[sectionIndex], newSections[sectionIndex - 1]];
+    newSections.forEach((s, i) => s.order = i);
+    updateCourse({ ...course, sections: newSections });
+  };
+
+  const handleMoveSectionDown = (sectionIndex: number) => {
+    if (sectionIndex === sections.length - 1) return;
+    const newSections = [...sections];
+    [newSections[sectionIndex], newSections[sectionIndex + 1]] = [newSections[sectionIndex + 1], newSections[sectionIndex]];
+    newSections.forEach((s, i) => s.order = i);
+    updateCourse({ ...course, sections: newSections });
+  };
+
   const handleRenameSection = (sectionId: string) => {
     if (!renameSectionTitle.trim()) return;
     const updatedSections = sections.map((s) =>
@@ -306,6 +340,43 @@ export function CourseContentManager({ courseId, onBack }: CourseContentManagerP
     });
     updateCourse({ ...course, sections: updatedSections });
     setShowLibrary(false);
+    setTargetSectionForAsset(null);
+  };
+
+  // Import from Personal Asset Library
+  const handleImportFromPersonalLibrary = (asset: AnyAsset, sectionId: string) => {
+    let lessonType: 'note' | 'quiz' | 'video' = 'note';
+    let content = '';
+    let quizQuestions: InlineMCQ[] | undefined;
+
+    if (asset.type === 'mcq') {
+      lessonType = 'quiz';
+      quizQuestions = (asset as any).quizQuestions || [];
+    } else if (asset.type === 'note') {
+      lessonType = 'note';
+      content = (asset as any).content || '';
+    } else if (asset.type === 'url') {
+      lessonType = 'note';
+      content = `<a href="${(asset as any).url}" target="_blank">${asset.title}</a>\n\n${(asset as any).description || ''}`;
+    }
+
+    const newLesson: InlineLesson = {
+      id: `lesson-${Date.now()}`,
+      title: asset.title,
+      type: lessonType,
+      content,
+      quizQuestions,
+      duration: 0,
+      order: sections.find((s: InlineSection) => s.id === sectionId)?.lessons.length || 0,
+    };
+
+    const updatedSections = sections.map((section: InlineSection) => {
+      if (section.id === sectionId) {
+        return { ...section, lessons: [...section.lessons, newLesson] };
+      }
+      return section;
+    });
+    updateCourse({ ...course, sections: updatedSections });
     setTargetSectionForAsset(null);
   };
 
@@ -439,7 +510,7 @@ export function CourseContentManager({ courseId, onBack }: CourseContentManagerP
 
       <div className="max-w-5xl mx-auto px-4 py-6">
         <div className="space-y-4">
-          {sections.map((section) => (
+          {sections.map((section, sectionIndex) => (
             <div key={section.id} className="bg-white dark:bg-gray-800 rounded-xl border dark:border-gray-700 overflow-hidden shadow-sm">
               <div className={`flex items-center justify-between px-4 py-3 ${isEditMode ? 'bg-orange-50 dark:bg-orange-900/20' : 'bg-gray-50 dark:bg-gray-900/50'}`}>
                 <div className="flex items-center gap-3 flex-1">
@@ -464,6 +535,12 @@ export function CourseContentManager({ courseId, onBack }: CourseContentManagerP
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
                       <DropdownMenuItem onClick={() => { setRenamingSection(section.id); setRenameSectionTitle(section.title); }}><Pencil className="w-4 h-4 mr-2" />Rename</DropdownMenuItem>
+                      {sectionIndex > 0 && (
+                        <DropdownMenuItem onClick={() => handleMoveSectionUp(sectionIndex)}><ArrowUp className="w-4 h-4 mr-2" />Move Up</DropdownMenuItem>
+                      )}
+                      {sectionIndex < sections.length - 1 && (
+                        <DropdownMenuItem onClick={() => handleMoveSectionDown(sectionIndex)}><ArrowDown className="w-4 h-4 mr-2" />Move Down</DropdownMenuItem>
+                      )}
                       <DropdownMenuItem onClick={() => handleDeleteSection(section.id)} className="text-red-600"><Trash2 className="w-4 h-4 mr-2" />Delete Topic</DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
@@ -504,9 +581,20 @@ export function CourseContentManager({ courseId, onBack }: CourseContentManagerP
                         </div>
                       ))}
                       {isEditMode && (
-                        <button onClick={() => setAddingToSection(section.id)} className="w-full flex items-center justify-center gap-2 p-3 rounded-lg border-2 border-dashed border-orange-300 dark:border-orange-700 text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors">
-                          <Plus className="w-4 h-4" />Add content
-                        </button>
+                        <div className="flex gap-2">
+                          <button onClick={() => setAddingToSection(section.id)} className="flex-1 flex items-center justify-center gap-2 p-3 rounded-lg border-2 border-dashed border-orange-300 dark:border-orange-700 text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors">
+                            <Plus className="w-4 h-4" />Add content
+                          </button>
+                          <button 
+                            onClick={() => {
+                              setTargetSectionForAsset(section.id);
+                              setShowPersonalLibrary(true);
+                            }} 
+                            className="flex items-center justify-center gap-2 px-4 py-3 rounded-lg border-2 border-dashed border-purple-300 dark:border-purple-700 text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-900/20 transition-colors"
+                          >
+                            <Library className="w-4 h-4" />Import from Library
+                          </button>
+                        </div>
                       )}
                     </div>
                   </motion.div>
@@ -876,6 +964,126 @@ export function CourseContentManager({ courseId, onBack }: CourseContentManagerP
               <div className="p-4 border-t dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
                 <p className="text-xs text-gray-500 text-center">{courseAssets.length} total assets • Content added to courses is auto-saved here</p>
               </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Personal Asset Library Modal */}
+      <AnimatePresence>
+        {showPersonalLibrary && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+            onClick={() => setShowPersonalLibrary(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white dark:bg-gray-800 rounded-xl max-w-4xl w-full max-h-[85vh] overflow-hidden shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="p-4 border-b dark:border-gray-700 flex items-center justify-between bg-gradient-to-r from-purple-500 to-pink-500">
+                <div className="flex items-center gap-2 text-white">
+                  <Library className="w-5 h-5" />
+                  <h3 className="font-semibold">Personal Asset Library</h3>
+                </div>
+                <button onClick={() => setShowPersonalLibrary(false)} className="text-white/80 hover:text-white">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Type Filter */}
+              <div className="p-3 border-b dark:border-gray-700 flex flex-wrap gap-2">
+                {[
+                  { type: 'all', label: 'All', icon: '📋' },
+                  { type: 'mcq', label: 'MCQ', icon: '📝' },
+                  { type: 'note', label: 'Notes', icon: '📒' },
+                ].map(({ type, label, icon }) => (
+                  <button
+                    key={type}
+                    onClick={() => setPersonalAssetFilterType(type as 'all' | 'mcq' | 'note')}
+                    className={`px-3 py-1.5 rounded-full text-sm font-medium transition-all ${
+                      personalAssetFilterType === type
+                        ? 'bg-purple-500 text-white'
+                        : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'
+                    }`}
+                  >
+                    {icon} {label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Asset List */}
+              <div className="p-4 overflow-y-auto" style={{ maxHeight: 'calc(85vh - 160px)' }}>
+                {personalAssets.filter((a) => personalAssetFilterType === 'all' || a.type === personalAssetFilterType).length === 0 ? (
+                  <div className="text-center py-12 text-gray-500">
+                    <Library className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                    <p className="font-medium">No assets available</p>
+                    <p className="text-sm">Add content to your Personal Library first</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {personalAssets
+                      .filter((a) => personalAssetFilterType === 'all' || a.type === personalAssetFilterType)
+                      .map((asset) => {
+                        const subject = personalSubjects.find((s) => s.id === asset.subjectId);
+                        const topic = personalTopics.find((t) => t.id === asset.topicId);
+                        
+                        return (
+                          <div
+                            key={asset.id}
+                            className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                          >
+                            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                              asset.type === 'mcq' ? 'bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400' :
+                              asset.type === 'note' ? 'bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400' :
+                              'bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400'
+                            }`}>
+                              {asset.type === 'mcq' ? '📝' : asset.type === 'note' ? '📒' : '🔗'}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="font-medium text-gray-900 dark:text-white truncate">{asset.title}</p>
+                              <div className="flex items-center gap-2 text-xs text-gray-500 mt-0.5">
+                                <span className="capitalize">{asset.type}</span>
+                                {subject && <span>• {subject.name}</span>}
+                                {topic && <span>• {topic.name}</span>}
+                                {asset.type === 'mcq' && (asset as any).quizQuestions && (
+                                  <span>• {(asset as any).quizQuestions.length} questions</span>
+                                )}
+                              </div>
+                            </div>
+                            <Button
+                              size="sm"
+                              disabled={!targetSectionForAsset}
+                              onClick={() => {
+                                if (targetSectionForAsset) {
+                                  handleImportFromPersonalLibrary(asset, targetSectionForAsset);
+                                  setShowPersonalLibrary(false);
+                                }
+                              }}
+                              className="gap-1"
+                            >
+                              <Download className="w-4 h-4" />
+                              Import
+                            </Button>
+                          </div>
+                        );
+                      })}
+                  </div>
+                )}
+              </div>
+
+              {targetSectionForAsset && (
+                <div className="p-3 border-t dark:border-gray-700 bg-purple-50 dark:bg-purple-900/20">
+                  <p className="text-sm text-purple-700 dark:text-purple-300 text-center">
+                    ✓ Importing to: {sections.find((s: InlineSection) => s.id === targetSectionForAsset)?.title || 'Selected Section'}
+                  </p>
+                </div>
+              )}
             </motion.div>
           </motion.div>
         )}

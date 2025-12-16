@@ -108,6 +108,8 @@ export interface GroupMCQ {
   question: string
   options: string[]
   correctIndex: number
+  explanation?: string  // Optional explanation for the answer
+  difficulty?: 'easy' | 'medium' | 'hard'  // Question difficulty level
   createdBy: string
   createdByName: string
   createdAt: number
@@ -211,17 +213,20 @@ export interface DeleteRequest {
 // Content Report/Correction System
 export interface ContentReport {
   id: string
-  groupId: string
+  groupId?: string  // Optional - for group content
   contentId: string  // ContentItem id or MCQ id
-  contentType: 'note' | 'quiz' | 'mcq'
+  contentType: 'note' | 'quiz' | 'mcq' | 'pack'
   contentTitle: string
+  reportType?: 'error' | 'inappropriate' | 'copyright' | 'other'  // Optional for new report system
   reportedBy: string  // userId
-  reportedByName: string
+  reportedByName?: string  // Legacy
+  reporterName?: string  // New report system
+  description?: string  // New report system
+  message?: string  // Legacy - What needs to be corrected
   creatorId: string  // content creator userId - for notification
-  creatorName: string
-  message: string  // What needs to be corrected
+  creatorName?: string
   questionId?: string  // For quiz - specific question
-  status: 'pending' | 'resolved' | 'dismissed'
+  status: 'pending' | 'resolved' | 'dismissed' | 'reviewed'
   createdAt: number
   resolvedAt?: number
 }
@@ -309,11 +314,25 @@ export interface LibraryTopic {
   createdAt: number
 }
 
+// Library Subtopic (e.g., সন্ধি, সমাস under ব্যাকরণ) - Optional
+export interface LibrarySubtopic {
+  id: string
+  subjectId: string
+  topicId: string
+  name: string
+  nameEn?: string
+  description?: string
+  order: number
+  isActive: boolean
+  createdAt: number
+}
+
 // Library Content Pack - A downloadable unit containing MCQs and/or Notes
 export interface LibraryContentPack {
   id: string
   subjectId: string
   topicId: string
+  subtopicId?: string  // Optional subtopic
   title: string
   description?: string
   tags: string[]
@@ -821,4 +840,257 @@ export interface CourseAnalytics {
   totalRevenue: number
   topLessons: { lessonId: string; title: string; views: number }[]
   dropOffPoints: { lessonId: string; title: string; dropRate: number }[]
+}
+
+// ==========================================
+// ASSET LIBRARY TYPES
+// ==========================================
+
+// Asset Subject (User's own subject classification)
+export interface AssetSubject {
+  id: string
+  userId: string
+  name: string
+  icon?: string  // emoji or icon name
+  order: number
+  createdAt: number
+}
+
+// Asset Topic (Under Subject)
+export interface AssetTopic {
+  id: string
+  userId: string
+  subjectId: string
+  name: string
+  order: number
+  createdAt: number
+}
+
+// Asset Subtopic (Optional, under Topic)
+export interface AssetSubtopic {
+  id: string
+  userId: string
+  topicId: string
+  name: string
+  order: number
+  createdAt: number
+}
+
+// Asset Type enum
+export type AssetType = 'mcq' | 'note' | 'url' | 'pdf' | 'video'
+
+// Usage Reference - tracks where asset is used
+export interface AssetUsageRef {
+  deskType: 'personal' | 'group' | 'teacher'
+  deskId: string  // groupId or courseId or 'personal'
+  deskName: string  // Group name or Course name
+  categoryId?: string
+  categoryName?: string
+  addedAt: number
+}
+
+// Base Asset interface
+export interface Asset {
+  id: string
+  userId: string
+  type: AssetType
+  
+  // Categorization
+  subjectId: string
+  topicId: string
+  subtopicId?: string
+  tags?: string[]
+  
+  // Metadata
+  title: string  // For display in list
+  createdAt: number
+  updatedAt: number
+  
+  // Usage tracking
+  usedIn: AssetUsageRef[]
+}
+
+// MCQ Asset - Collection of MCQs
+export interface AssetMCQQuestion {
+  id: string
+  question: string
+  options: string[]
+  correctIndex: number
+  explanation?: string
+  difficulty?: 'easy' | 'medium' | 'hard'
+}
+
+export interface AssetMCQ extends Asset {
+  type: 'mcq'
+  quizQuestions: AssetMCQQuestion[]
+}
+
+// Note Asset
+export interface AssetNote extends Asset {
+  type: 'note'
+  content: string  // HTML content
+}
+
+// URL Asset (Link)
+export interface AssetURL extends Asset {
+  type: 'url'
+  url: string
+  description?: string
+  thumbnail?: string
+}
+
+// PDF Asset
+export interface AssetPDF extends Asset {
+  type: 'pdf'
+  fileUrl: string
+  fileName: string
+  fileSize: number
+  pageCount?: number
+}
+
+// Video Asset
+export interface AssetVideo extends Asset {
+  type: 'video'
+  videoUrl: string  // YouTube, Vimeo, or direct URL
+  videoType: 'youtube' | 'vimeo' | 'direct'
+  duration?: number  // seconds
+  thumbnail?: string
+}
+
+// Union type for all assets
+export type AnyAsset = AssetMCQ | AssetNote | AssetURL | AssetPDF | AssetVideo
+
+// ============================================
+// PERSONAL DESK - Course-based Structure
+// (Same structure as Group Desk)
+// ============================================
+
+export interface PersonalCourse {
+  id: string
+  userId: string
+  name: string
+  description?: string
+  icon?: string  // emoji or icon name
+  color?: string  // theme color
+  order: number
+  createdAt: number
+  updatedAt: number
+}
+
+export interface PersonalTopic {
+  id: string
+  courseId: string
+  userId: string
+  name: string
+  order: number
+  createdAt: number
+}
+
+export interface PersonalSubTopic {
+  id: string
+  topicId: string
+  courseId: string
+  userId: string
+  name: string
+  order: number
+  status: 'todo' | 'in-progress' | 'completed'
+  createdAt: number
+}
+
+export interface PersonalContentItem {
+  id: string
+  subTopicId: string
+  topicId: string
+  courseId: string
+  userId: string
+  type: 'note' | 'quiz' | 'file' | 'link'
+  title: string
+  content: string  // HTML for notes, JSON for quiz, URL for files/links
+  order?: number
+  assetRef?: string  // Reference to Asset Library item
+  createdAt: number
+  updatedAt: number
+}
+
+export interface PersonalQuestionCategory {
+  id: string
+  courseId: string
+  userId: string
+  name: string
+  createdAt: number
+}
+
+export interface PersonalMCQ {
+  id: string
+  courseId: string
+  categoryId: string
+  userId: string
+  subTopicId?: string
+  question: string
+  options: string[]
+  correctIndex: number
+  explanation?: string
+  difficulty?: 'easy' | 'medium' | 'hard'
+  assetRef?: string  // Reference to Asset Library item
+  createdAt: number
+}
+
+export interface PersonalQuizResult {
+  id: string
+  courseId: string
+  quizItemId: string
+  quizTitle: string
+  userId: string
+  score: number
+  correct: number
+  wrong: number
+  unanswered: number
+  total: number
+  timeTaken: number
+  answers: { questionId: string; selected: number | null; correct: number }[]
+  createdAt: number
+}
+
+export interface PersonalLiveTest {
+  id: string
+  courseId: string
+  userId: string
+  title: string
+  categoryIds: string[]
+  questionCount: number
+  duration: number  // minutes
+  scheduledAt?: number
+  startedAt?: number
+  endedAt?: number
+  status: 'scheduled' | 'active' | 'completed'
+  showSolution: boolean
+  createdAt: number
+}
+
+export interface PersonalLiveTestResult {
+  id: string
+  testId: string
+  courseId: string
+  userId: string
+  score: number
+  correct: number
+  wrong: number
+  unanswered: number
+  total: number
+  timeTaken: number
+  answers: { questionId: string; selected: number | null; correct: number }[]
+  submittedAt: number
+}
+
+// ==================== NOTIFICATION SYSTEM ====================
+
+export interface UserNotification {
+  id: string
+  userId: string
+  type: 'report' | 'system' | 'update' | 'message'
+  title: string
+  message: string
+  link?: string  // Link to navigate when clicked
+  isRead: boolean
+  createdAt: number
 }

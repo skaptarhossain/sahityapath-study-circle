@@ -52,6 +52,7 @@ import { StudentManagement } from './student-management';
 import { syncLocalToFirestore } from '@/services/coaching-firestore';
 import { useToast } from '@/components/ui/toast';
 import type { Course } from '@/types';
+import type { CoachingSubTab } from '@/components/layout/main-layout';
 
 const fadeIn = {
   hidden: { opacity: 0, y: 20 },
@@ -236,12 +237,15 @@ function StatsCard({ icon: Icon, label, value, trend, color }: { icon: React.Ele
   );
 }
 
-export function CoachingDashboard() {
+interface CoachingDashboardProps {
+  activeSubTab: CoachingSubTab
+  setActiveSubTab: (tab: CoachingSubTab) => void
+}
+
+export function CoachingDashboard({ activeSubTab, setActiveSubTab }: CoachingDashboardProps) {
   const { user } = useAuthStore();
   const { courses, teachers, myCourses, teacherProfile, loadFromFirestore } = useCoachingStore();
   const toast = useToast();
-  const [view, setView] = useState<'teacher' | 'student'>('student');
-  const [teacherTab, setTeacherTab] = useState<'courses' | 'settings'>('courses');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
@@ -362,33 +366,26 @@ export function CoachingDashboard() {
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-950 -mx-4 sm:mx-0">
-      {/* Header - Compact on mobile */}
-      <div className="bg-gradient-to-r from-indigo-600 via-purple-600 to-indigo-700 text-white">
-        <div className="max-w-7xl mx-auto px-4 py-4 sm:py-6">
+      {/* Header - Hidden on mobile, shown on desktop */}
+      <div className="hidden sm:block bg-gradient-to-r from-indigo-600 via-purple-600 to-indigo-700 text-white">
+        <div className="max-w-7xl mx-auto px-4 py-6">
           <div className="flex items-center justify-between gap-3">
-            {/* Title - Hidden on mobile, shown on desktop */}
-            <div className="hidden sm:flex items-center gap-3">
+            <div className="flex items-center gap-3">
               <div className="p-3 bg-white/20 rounded-xl backdrop-blur-sm"><GraduationCap className="w-8 h-8" /></div>
               <div>
                 <h1 className="text-2xl font-bold">Coaching Desk</h1>
-                <p className="text-white/80 text-sm">{view === 'teacher' ? 'Manage your courses' : 'Learn from the best'}</p>
+                <p className="text-white/80 text-sm">{activeSubTab === 'browse' ? 'Learn from the best' : 'Manage your courses'}</p>
               </div>
             </div>
-            {/* Mobile Title */}
-            <div className="sm:hidden">
-              <h1 className="text-lg font-bold flex items-center gap-2">
-                <GraduationCap className="w-5 h-5" /> Coaching
-              </h1>
-            </div>
-            {/* Student/Teacher Toggle */}
-            <div className="flex items-center gap-1 bg-white/10 rounded-xl p-1">
-              <button onClick={() => setView('student')} className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all ${view === 'student' ? 'bg-white text-indigo-600' : 'text-white hover:bg-white/10'}`}>
-                <BookOpen className="w-4 h-4 inline sm:mr-2" />
-                <span className="hidden sm:inline">Student</span>
+            {/* Browse/My Courses Toggle - Desktop only */}
+            <div className="hidden lg:flex items-center gap-1 bg-white/10 rounded-xl p-1">
+              <button onClick={() => setActiveSubTab('browse')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${activeSubTab === 'browse' ? 'bg-white text-indigo-600' : 'text-white hover:bg-white/10'}`}>
+                <BookOpen className="w-4 h-4 inline mr-2" />
+                Browse
               </button>
-              <button onClick={() => setView('teacher')} className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all ${view === 'teacher' ? 'bg-white text-indigo-600' : 'text-white hover:bg-white/10'}`}>
-                <UserCheck className="w-4 h-4 inline sm:mr-2" />
-                <span className="hidden sm:inline">Teacher</span>
+              <button onClick={() => setActiveSubTab('my-courses')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${activeSubTab === 'my-courses' || activeSubTab === 'settings' ? 'bg-white text-indigo-600' : 'text-white hover:bg-white/10'}`}>
+                <UserCheck className="w-4 h-4 inline mr-2" />
+                My Courses
               </button>
             </div>
           </div>
@@ -396,7 +393,7 @@ export function CoachingDashboard() {
       </div>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
-        {view === 'teacher' && (
+        {(activeSubTab === 'my-courses' || activeSubTab === 'settings') && (
           <motion.div variants={staggerContainer} initial="hidden" animate="visible" className="space-y-6">
             {!hasTeacherProfile ? (
               <motion.div variants={fadeIn} className="bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-900/20 dark:to-orange-900/20 rounded-2xl p-6 border border-amber-200 dark:border-amber-800">
@@ -419,9 +416,9 @@ export function CoachingDashboard() {
                   <StatsCard icon={Star} label="Rating" value={teacherStats.avgRating} color="rose" />
                 </div>
                 
-                {/* Teacher Tabs */}
-                <Tabs value={teacherTab} onValueChange={(v) => setTeacherTab(v as typeof teacherTab)} className="w-full">
-                  <TabsList className="grid w-full grid-cols-2 mb-6">
+                {/* Teacher Tabs - Hidden on mobile */}
+                <Tabs value={activeSubTab === 'settings' ? 'settings' : 'courses'} onValueChange={(v) => setActiveSubTab(v === 'settings' ? 'settings' : 'my-courses')} className="w-full">
+                  <TabsList className="hidden lg:grid w-full grid-cols-2 mb-6">
                     <TabsTrigger value="courses"><BookOpen className="h-4 w-4 mr-2" /> My Courses</TabsTrigger>
                     <TabsTrigger value="settings"><Settings className="h-4 w-4 mr-2" /> Settings</TabsTrigger>
                   </TabsList>
@@ -527,7 +524,7 @@ export function CoachingDashboard() {
           </motion.div>
         )}
 
-        {view === 'student' && (
+        {activeSubTab === 'browse' && (
           <motion.div variants={staggerContainer} initial="hidden" animate="visible" className="space-y-6">
             {/* Search and Category Bar */}
             <motion.div variants={fadeIn} className="bg-white dark:bg-gray-900 rounded-2xl p-4 border border-gray-200 dark:border-gray-800">

@@ -65,6 +65,10 @@ export function CourseDetailPage({ courseId, onBack, onEnroll }: CourseDetailPag
     enrollments,
     reviews,
     addEnrollment,
+    addReview,
+    updateCourse,
+    updateReview,
+    markLessonComplete,
     getSectionsByCourse,
     getLessonsBySection,
     isEnrolled,
@@ -82,11 +86,32 @@ export function CourseDetailPage({ courseId, onBack, onEnroll }: CourseDetailPag
   const userEnrollment = user
     ? getEnrollmentsByStudent(user.id).find((e) => e.courseId === courseId)
     : null;
+  
+  // Check if user already reviewed
+  const userReview = user ? courseReviews.find(r => r.studentId === user.id) : null;
 
   // UI State
   const [expandedSections, setExpandedSections] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<'overview' | 'curriculum' | 'reviews'>('overview');
   const [showEnrollModal, setShowEnrollModal] = useState(false);
+  
+  // Review form state
+  const [showReviewForm, setShowReviewForm] = useState(false);
+  const [reviewRating, setReviewRating] = useState(5);
+  const [reviewText, setReviewText] = useState('');
+  const [hoverRating, setHoverRating] = useState(0);
+  const [showEnrollSuccess, setShowEnrollSuccess] = useState(false);
+  const [viewingLesson, setViewingLesson] = useState<CourseLesson | null>(null);
+  
+  // Teacher reply state
+  const [replyingToReviewId, setReplyingToReviewId] = useState<string | null>(null);
+  const [replyText, setReplyText] = useState('');
+  
+  // Check if current user is the course teacher
+  const isTeacher = user && course && user.id === course.teacherId;
+  
+  // Get completed lesson IDs from enrollment
+  const completedLessonIds = userEnrollment?.completedLessonIds || [];
 
   // Toggle section expand
   const toggleSection = (sectionId: string) => {
@@ -95,6 +120,43 @@ export function CourseDetailPage({ courseId, onBack, onEnroll }: CourseDetailPag
         ? prev.filter((id) => id !== sectionId)
         : [...prev, sectionId]
     );
+  };
+
+  // Submit review
+  const handleSubmitReview = () => {
+    if (!user || !course || !reviewText.trim()) return;
+    
+    const newReview = {
+      id: `review_${Date.now()}`,
+      courseId: course.id,
+      studentId: user.id,
+      studentName: user.displayName || 'Anonymous',
+      studentPhoto: user.photoURL,
+      rating: reviewRating,
+      review: reviewText.trim(),
+      isVerifiedPurchase: userEnrolled,
+      helpfulCount: 0,
+      reportCount: 0,
+      status: 'published' as const,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    
+    addReview(newReview);
+    
+    // Update course rating
+    const allReviews = [...courseReviews, newReview];
+    const avgRating = allReviews.reduce((sum, r) => sum + r.rating, 0) / allReviews.length;
+    updateCourse({
+      ...course,
+      rating: Math.round(avgRating * 10) / 10,
+      totalReviews: allReviews.length,
+    });
+    
+    // Reset form
+    setReviewText('');
+    setReviewRating(5);
+    setShowReviewForm(false);
   };
 
   // Calculate total stats
@@ -135,8 +197,8 @@ export function CourseDetailPage({ courseId, onBack, onEnroll }: CourseDetailPag
       teacherId: teacher.id,
       teacherName: teacher.displayName,
       studentId: user.id,
-      studentName: user.displayName,
-      studentEmail: user.email,
+      studentName: user.displayName || 'Student',
+      studentEmail: user.email || '',
       pricing: course.price === 0 ? 'free' : 'paid',
       pricePaid: course.discountPrice || course.price,
       progress: 0,
@@ -147,7 +209,18 @@ export function CourseDetailPage({ courseId, onBack, onEnroll }: CourseDetailPag
     };
 
     addEnrollment(enrollment);
+    
+    // Update course total students
+    updateCourse({
+      ...course,
+      totalStudents: course.totalStudents + 1,
+    });
+    
     setShowEnrollModal(false);
+    setShowEnrollSuccess(true);
+    
+    // Auto hide success after 3 seconds
+    setTimeout(() => setShowEnrollSuccess(false), 3000);
   };
 
   // Lesson icon based on type
@@ -416,7 +489,41 @@ export function CourseDetailPage({ courseId, onBack, onEnroll }: CourseDetailPag
 
                   {/* Share */}
                   <div className="pt-4 border-t dark:border-gray-800">
-                    <button className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 hover:text-indigo-600 transition-colors">
+                    <button 
+                      className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 hover:text-indigo-600 transition-colors"
+                      onClick={async () => {
+                        const shareUrl = window.location.href;
+                        const shareTitle = course.title;
+                        const shareText = course.description.slice(0, 100) + '...';
+
+                        if (navigator.share) {
+                          try {
+                            await navigator.share({
+                              title: shareTitle,
+                              text: shareText,
+                              url: shareUrl,
+                            });
+                          } catch (err) {
+                            // User cancelled sharing
+                          }
+                        } else {
+                          // Fallback: Copy to clipboard
+                          try {
+                            await navigator.clipboard.writeText(shareUrl);
+                            alert('Link copied to clipboard!');
+                          } catch (err) {
+                            // Fallback for older browsers
+                            const textArea = document.createElement('textarea');
+                            textArea.value = shareUrl;
+                            document.body.appendChild(textArea);
+                            textArea.select();
+                            document.execCommand('copy');
+                            document.body.removeChild(textArea);
+                            alert('Link copied to clipboard!');
+                          }
+                        }
+                      }}
+                    >
                       <Share2 className="w-4 h-4" />
                       Share this course
                     </button>
@@ -654,10 +761,16 @@ export function CourseDetailPage({ courseId, onBack, onEnroll }: CourseDetailPag
                                     {sectionLessons.map((lesson, lessonIndex) => {
                                       const LessonIcon = getLessonIcon(lesson.type);
                                       const isLocked = !userEnrolled && !lesson.isPreviewable;
+                                      const isCompleted = completedLessonIds.includes(lesson.id);
 
                                       return (
                                         <div
                                           key={lesson.id}
+                                          onClick={() => {
+                                            if (!isLocked) {
+                                              setViewingLesson(lesson);
+                                            }
+                                          }}
                                           className={`p-4 flex items-center justify-between border-b dark:border-gray-800 last:border-0 ${
                                             isLocked
                                               ? 'opacity-60'
@@ -667,17 +780,23 @@ export function CourseDetailPage({ courseId, onBack, onEnroll }: CourseDetailPag
                                           <div className="flex items-center gap-3">
                                             <div
                                               className={`w-8 h-8 rounded-lg flex items-center justify-center ${
-                                                lesson.type === 'video'
+                                                isCompleted
+                                                  ? 'bg-green-100 dark:bg-green-900/50 text-green-600'
+                                                  : lesson.type === 'video'
                                                   ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-600'
                                                   : lesson.type === 'quiz'
                                                   ? 'bg-amber-100 dark:bg-amber-900/50 text-amber-600'
                                                   : 'bg-gray-100 dark:bg-gray-800 text-gray-600'
                                               }`}
                                             >
-                                              <LessonIcon className="w-4 h-4" />
+                                              {isCompleted ? (
+                                                <Check className="w-4 h-4" />
+                                              ) : (
+                                                <LessonIcon className="w-4 h-4" />
+                                              )}
                                             </div>
                                             <div>
-                                              <p className="font-medium text-gray-900 dark:text-white text-sm">
+                                              <p className={`font-medium text-sm ${isCompleted ? 'text-green-600 dark:text-green-400' : 'text-gray-900 dark:text-white'}`}>
                                                 {lesson.title}
                                               </p>
                                               <div className="flex items-center gap-2 text-xs text-gray-500">
@@ -749,19 +868,109 @@ export function CourseDetailPage({ courseId, onBack, onEnroll }: CourseDetailPag
                           {course.totalReviews} reviews
                         </p>
                       </div>
+                      
+                      {/* Write Review Button */}
+                      {user && !userReview && (
+                        <Button 
+                          onClick={() => setShowReviewForm(true)}
+                          className="ml-auto"
+                        >
+                          <Star className="w-4 h-4 mr-2" />
+                          Write a Review
+                        </Button>
+                      )}
                     </div>
                   </div>
 
+                  {/* Review Form */}
+                  {showReviewForm && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="p-6 bg-white dark:bg-gray-900 rounded-2xl border dark:border-gray-800"
+                    >
+                      <h3 className="text-lg font-semibold mb-4">Write Your Review</h3>
+                      
+                      {/* Star Rating */}
+                      <div className="mb-4">
+                        <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">Your Rating</p>
+                        <div className="flex items-center gap-1">
+                          {[1, 2, 3, 4, 5].map((star) => (
+                            <button
+                              key={star}
+                              type="button"
+                              onClick={() => setReviewRating(star)}
+                              onMouseEnter={() => setHoverRating(star)}
+                              onMouseLeave={() => setHoverRating(0)}
+                              className="p-1 transition-transform hover:scale-110"
+                            >
+                              <Star
+                                className={`w-8 h-8 ${
+                                  star <= (hoverRating || reviewRating)
+                                    ? 'text-amber-400 fill-amber-400'
+                                    : 'text-gray-300'
+                                }`}
+                              />
+                            </button>
+                          ))}
+                          <span className="ml-2 text-sm text-gray-500">
+                            {reviewRating === 5 ? 'Excellent!' : 
+                             reviewRating === 4 ? 'Very Good' :
+                             reviewRating === 3 ? 'Good' :
+                             reviewRating === 2 ? 'Fair' : 'Poor'}
+                          </span>
+                        </div>
+                      </div>
+                      
+                      {/* Review Text */}
+                      <div className="mb-4">
+                        <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">Your Review</p>
+                        <textarea
+                          value={reviewText}
+                          onChange={(e) => setReviewText(e.target.value)}
+                          placeholder="Share your experience with this course..."
+                          className="w-full h-32 p-3 rounded-lg border dark:border-gray-700 bg-gray-50 dark:bg-gray-800 focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-none"
+                        />
+                      </div>
+                      
+                      {/* Action Buttons */}
+                      <div className="flex gap-3">
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            setShowReviewForm(false);
+                            setReviewText('');
+                            setReviewRating(5);
+                          }}
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          onClick={handleSubmitReview}
+                          disabled={!reviewText.trim()}
+                        >
+                          Submit Review
+                        </Button>
+                      </div>
+                    </motion.div>
+                  )}
+
                   {/* Reviews List */}
-                  {courseReviews.length === 0 ? (
+                  {courseReviews.length === 0 && !showReviewForm ? (
                     <div className="text-center py-12 bg-gray-50 dark:bg-gray-900 rounded-xl">
                       <MessageCircle className="w-12 h-12 text-gray-300 mx-auto mb-3" />
                       <p className="text-gray-500">No reviews yet</p>
                       <p className="text-sm text-gray-400 mt-1">
                         Be the first to review this course!
                       </p>
+                      {user && (
+                        <Button onClick={() => setShowReviewForm(true)} className="mt-4">
+                          <Star className="w-4 h-4 mr-2" />
+                          Write a Review
+                        </Button>
+                      )}
                     </div>
-                  ) : (
+                  ) : courseReviews.length > 0 && (
                     <div className="space-y-4">
                       {courseReviews.map((review) => (
                         <div
@@ -793,6 +1002,77 @@ export function CourseDetailPage({ courseId, onBack, onEnroll }: CourseDetailPag
                               <p className="text-gray-600 dark:text-gray-400 text-sm mt-2">
                                 {review.review}
                               </p>
+
+                              {/* Teacher Reply Section */}
+                              {review.teacherReply && (
+                                <div className="mt-3 p-3 bg-indigo-50 dark:bg-indigo-900/20 rounded-lg border-l-4 border-indigo-500">
+                                  <div className="flex items-center gap-2 mb-1">
+                                    <BadgeCheck className="w-4 h-4 text-indigo-600" />
+                                    <span className="text-sm font-medium text-indigo-700 dark:text-indigo-400">
+                                      Teacher's Response
+                                    </span>
+                                  </div>
+                                  <p className="text-sm text-gray-700 dark:text-gray-300">
+                                    {review.teacherReply}
+                                  </p>
+                                </div>
+                              )}
+
+                              {/* Reply Button for Teacher */}
+                              {isTeacher && !review.teacherReply && (
+                                <>
+                                  {replyingToReviewId === review.id ? (
+                                    <div className="mt-3 space-y-2">
+                                      <textarea
+                                        value={replyText}
+                                        onChange={(e) => setReplyText(e.target.value)}
+                                        placeholder="Write your response..."
+                                        className="w-full p-3 border rounded-lg dark:bg-gray-800 dark:border-gray-700 text-sm resize-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                                        rows={3}
+                                      />
+                                      <div className="flex gap-2 justify-end">
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          onClick={() => {
+                                            setReplyingToReviewId(null);
+                                            setReplyText('');
+                                          }}
+                                        >
+                                          Cancel
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          disabled={!replyText.trim()}
+                                          onClick={() => {
+                                            updateReview({
+                                              ...review,
+                                              teacherReply: replyText.trim(),
+                                              teacherRepliedAt: Date.now(),
+                                              updatedAt: Date.now(),
+                                            });
+                                            setReplyingToReviewId(null);
+                                            setReplyText('');
+                                          }}
+                                        >
+                                          <MessageCircle className="w-4 h-4 mr-1" />
+                                          Reply
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="mt-2 text-indigo-600"
+                                      onClick={() => setReplyingToReviewId(review.id)}
+                                    >
+                                      <MessageCircle className="w-4 h-4 mr-1" />
+                                      Reply as Teacher
+                                    </Button>
+                                  )}
+                                </>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -854,6 +1134,198 @@ export function CourseDetailPage({ courseId, onBack, onEnroll }: CourseDetailPag
                   30-day money-back guarantee
                 </p>
               </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Enrollment Success Toast */}
+      <AnimatePresence>
+        {showEnrollSuccess && (
+          <motion.div
+            initial={{ opacity: 0, y: 50 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 50 }}
+            className="fixed bottom-20 left-1/2 -translate-x-1/2 z-50 bg-green-600 text-white px-6 py-3 rounded-xl shadow-lg flex items-center gap-3"
+          >
+            <CheckCircle2 className="w-5 h-5" />
+            <span className="font-medium">Successfully enrolled! Start learning now.</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Lesson Viewer Modal */}
+      <AnimatePresence>
+        {viewingLesson && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+            onClick={() => setViewingLesson(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="p-4 border-b dark:border-gray-800 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                    viewingLesson.type === 'video'
+                      ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-600'
+                      : viewingLesson.type === 'quiz'
+                      ? 'bg-amber-100 dark:bg-amber-900/50 text-amber-600'
+                      : 'bg-gray-100 dark:bg-gray-800 text-gray-600'
+                  }`}>
+                    {viewingLesson.type === 'video' ? (
+                      <Video className="w-5 h-5" />
+                    ) : viewingLesson.type === 'quiz' ? (
+                      <FileQuestion className="w-5 h-5" />
+                    ) : (
+                      <FileText className="w-5 h-5" />
+                    )}
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-gray-900 dark:text-white">
+                      {viewingLesson.title}
+                    </h3>
+                    <p className="text-sm text-gray-500">
+                      {viewingLesson.type === 'video' ? 'Video Lesson' : 
+                       viewingLesson.type === 'quiz' ? 'Quiz' : 'Reading Material'}
+                      {viewingLesson.duration && ` • ${formatDuration(viewingLesson.duration)}`}
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setViewingLesson(null)}
+                >
+                  ✕
+                </Button>
+              </div>
+
+              {/* Content */}
+              <div className="flex-1 overflow-auto p-6">
+                {viewingLesson.type === 'video' && viewingLesson.content ? (
+                  <div className="aspect-video bg-black rounded-xl overflow-hidden">
+                    {viewingLesson.content.includes('youtube.com') || viewingLesson.content.includes('youtu.be') ? (
+                      <iframe
+                        src={viewingLesson.content.replace('watch?v=', 'embed/').replace('youtu.be/', 'youtube.com/embed/')}
+                        className="w-full h-full"
+                        allowFullScreen
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                      />
+                    ) : viewingLesson.content.includes('vimeo.com') ? (
+                      <iframe
+                        src={viewingLesson.content.replace('vimeo.com', 'player.vimeo.com/video')}
+                        className="w-full h-full"
+                        allowFullScreen
+                      />
+                    ) : (
+                      <video
+                        src={viewingLesson.content}
+                        className="w-full h-full"
+                        controls
+                      />
+                    )}
+                  </div>
+                ) : viewingLesson.type === 'note' && viewingLesson.content ? (
+                  <div className="prose dark:prose-invert max-w-none">
+                    <div dangerouslySetInnerHTML={{ __html: viewingLesson.content }} />
+                  </div>
+                ) : viewingLesson.type === 'pdf' && viewingLesson.content ? (
+                  <div className="text-center py-12">
+                    <FileText className="w-16 h-16 text-red-500 mx-auto mb-4" />
+                    <h4 className="text-lg font-medium mb-2">PDF Document</h4>
+                    <p className="text-gray-500 mb-4">Click below to open the PDF.</p>
+                    <Button
+                      onClick={() => window.open(viewingLesson.content, '_blank')}
+                    >
+                      Open PDF
+                    </Button>
+                  </div>
+                ) : viewingLesson.type === 'link' && viewingLesson.content ? (
+                  <div className="text-center py-12">
+                    <Link2 className="w-16 h-16 text-indigo-500 mx-auto mb-4" />
+                    <h4 className="text-lg font-medium mb-2">External Resource</h4>
+                    <p className="text-gray-500 mb-4">This lesson links to an external resource.</p>
+                    <Button
+                      onClick={() => window.open(viewingLesson.content, '_blank')}
+                    >
+                      Open Link
+                    </Button>
+                  </div>
+                ) : viewingLesson.type === 'live-class' ? (
+                  <div className="text-center py-12">
+                    <Video className="w-16 h-16 text-green-500 mx-auto mb-4" />
+                    <h4 className="text-lg font-medium mb-2">Live Class</h4>
+                    {viewingLesson.liveClassStartTime && (
+                      <p className="text-gray-500 mb-4">
+                        Scheduled: {new Date(viewingLesson.liveClassStartTime).toLocaleString()}
+                      </p>
+                    )}
+                    {viewingLesson.liveClassLink && (
+                      <Button
+                        onClick={() => window.open(viewingLesson.liveClassLink, '_blank')}
+                      >
+                        Join Live Class
+                      </Button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="text-center py-12">
+                    <FileText className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+                    <p className="text-gray-500">Content not available</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer - Mark Complete */}
+              {userEnrolled && userEnrollment && (
+                <div className="p-4 border-t dark:border-gray-800 flex items-center justify-between bg-gray-50 dark:bg-gray-800/50">
+                  <div className="flex items-center gap-2">
+                    {completedLessonIds.includes(viewingLesson.id) ? (
+                      <>
+                        <CheckCircle2 className="w-5 h-5 text-green-500" />
+                        <span className="text-green-600 dark:text-green-400 font-medium">
+                          Completed
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-gray-500">Mark this lesson as complete</span>
+                    )}
+                  </div>
+                  <Button
+                    onClick={async () => {
+                      if (!completedLessonIds.includes(viewingLesson.id)) {
+                        await markLessonComplete(userEnrollment.id, viewingLesson.id);
+                      }
+                      setViewingLesson(null);
+                    }}
+                    className={completedLessonIds.includes(viewingLesson.id) 
+                      ? 'bg-green-600 hover:bg-green-700' 
+                      : ''
+                    }
+                  >
+                    {completedLessonIds.includes(viewingLesson.id) ? (
+                      <>
+                        <Check className="w-4 h-4 mr-2" />
+                        Done
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="w-4 h-4 mr-2" />
+                        Mark as Complete
+                      </>
+                    )}
+                  </Button>
+                </div>
+              )}
             </motion.div>
           </motion.div>
         )}

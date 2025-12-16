@@ -23,6 +23,7 @@ import {
   MoreVertical,
   ArrowUp,
   ArrowDown,
+  ArrowLeft,
   GripVertical,
   X,
   Heading,
@@ -52,6 +53,8 @@ import {
   CheckCircle2,
   CircleDot,
   RefreshCw,
+  ChevronLeft,
+  Library,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -64,6 +67,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { useGroupStore } from '@/stores/group-store'
 import { useAuthStore } from '@/stores/auth-store'
 import { useLibraryStore } from '@/stores/library-store'
+import { useAssetStore } from '@/stores/asset-store'
 import { storage, db } from '@/config/firebase'
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
 import { doc, setDoc, getDoc, updateDoc, query, collection, where, getDocs } from 'firebase/firestore'
@@ -73,8 +77,14 @@ import 'react-quill/dist/quill.snow.css'
 import type { Group, GroupTopic, GroupSubTopic, GroupContentItem, GroupMCQ, DeleteRequest, GroupQuestionCategory, GroupQuizResult, LiveTest, LiveTestResult, LibraryContentPack } from '@/types'
 import { GroupQuizRunner } from './group-quiz-runner'
 import { ReportDialog } from './report-dialog'
+import type { GroupSubTab } from '@/components/layout/main-layout'
 
-export function GroupDashboard() {
+interface GroupDashboardProps {
+  activeSubTab: GroupSubTab
+  setActiveSubTab: (tab: GroupSubTab) => void
+}
+
+export function GroupDashboard({ activeSubTab, setActiveSubTab }: GroupDashboardProps) {
   const user = useAuthStore(s => s.user)
   const { 
     myGroups,
@@ -137,12 +147,13 @@ export function GroupDashboard() {
     getLiveTestLeaderboard,
     setAutoLiveTestConfig,
     getAutoLiveTestConfig,
+    loadGroupFromFirebase,
+    subscribeToGroup,
   } = useGroupStore()
 
   // UI States
   const [showCreateGroup, setShowCreateGroup] = useState(false)
   const [showJoinGroup, setShowJoinGroup] = useState(false)
-  const [activeTab, setActiveTab] = useState<'whats-new' | 'course' | 'live-test' | 'settings'>('whats-new')
   const [expandedTopics, setExpandedTopics] = useState<string[]>([])
   const [isEditMode, setIsEditMode] = useState(false)  // Display vs Edit mode
   const [viewingContent, setViewingContent] = useState<GroupContentItem | null>(null)  // For viewing content in display mode
@@ -159,6 +170,7 @@ export function GroupDashboard() {
   const [addingToTopicId, setAddingToTopicId] = useState<string | null>(null)
   const [newItemName, setNewItemName] = useState('')
   const [newItemType, setNewItemType] = useState<'note' | 'quiz' | 'heading' | 'text' | 'link'>('note')
+  const [addContentMode, setAddContentMode] = useState<'choose' | 'manual' | 'library'>('choose')
   
   // Secondary modal for item details
   const [showItemDetailModal, setShowItemDetailModal] = useState(false)
@@ -233,6 +245,8 @@ export function GroupDashboard() {
     question: string
     options: string[]
     correctIndex: number
+    explanation?: string
+    difficulty?: 'easy' | 'medium' | 'hard'
   }>>([])
   const [groupUploadCategory, setGroupUploadCategory] = useState('')
   const [groupUploadLoading, setGroupUploadLoading] = useState(false)
@@ -243,6 +257,24 @@ export function GroupDashboard() {
   const [libraryDownloadCategory, setLibraryDownloadCategory] = useState('')
   const [libraryDownloadMode, setLibraryDownloadMode] = useState<'new' | 'merge'>('new')
   const [libraryNewCategoryName, setLibraryNewCategoryName] = useState('')
+  
+  // Asset Library Import states
+  const [showImportFromLibrary, setShowImportFromLibrary] = useState(false)
+  const [importAssetType, setImportAssetType] = useState<'mcq' | 'note' | 'url' | 'pdf' | 'video' | 'all'>('all')
+  const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([])
+  const [importTargetTopicId, setImportTargetTopicId] = useState<string | null>(null)
+  
+  // Asset store
+  const {
+    subjects: assetSubjects,
+    topics: assetTopics,
+    assets: allAssets,
+    selectedSubjectId: assetSelectedSubject,
+    selectedTopicId: assetSelectedTopic,
+    setSelectedSubject: setAssetSelectedSubject,
+    setSelectedTopic: setAssetSelectedTopic,
+    getTopicsBySubject: getAssetTopicsBySubject,
+  } = useAssetStore()
   
   // Library store
   const {
@@ -388,10 +420,12 @@ export function GroupDashboard() {
     }
   }
 
-  // Auto-sync when active group changes
+  // Auto-sync when active group changes - use new Firebase sync
   useEffect(() => {
     if (activeGroupId) {
-      syncGroupFromCloud(activeGroupId)
+      loadGroupFromFirebase(activeGroupId)
+      const unsubscribe = subscribeToGroup(activeGroupId)
+      return () => unsubscribe()
     }
   }, [activeGroupId])
 
@@ -505,11 +539,10 @@ export function GroupDashboard() {
   
   const isAdmin = activeGroup?.adminId === user?.id
 
-  // Get group data
-  const groupTopics = useMemo(() => 
-    activeGroupId ? getTopicsByGroup(activeGroupId) : [],
-    [activeGroupId, topics]
-  )
+  // Get group data - directly filter topics for proper reactivity
+  const groupTopics = activeGroupId 
+    ? topics.filter(t => t.groupId === activeGroupId).sort((a, b) => a.order - b.order)
+    : []
   
   const groupMCQList = useMemo(() =>
     activeGroupId ? getMCQsByGroup(activeGroupId) : [],
@@ -691,19 +724,21 @@ export function GroupDashboard() {
       }
       
       // Parse questions (skip header)
-      const questions: Array<{ question: string; options: string[]; correctIndex: number }> = []
+      const questions: Array<{ question: string; options: string[]; correctIndex: number; explanation?: string; difficulty?: 'easy' | 'medium' | 'hard' }> = []
       
       for (let i = 1; i < jsonData.length; i++) {
         const row = jsonData[i]
         if (!row || !row[0]) continue
         
-        // Expected format: Question | Option A | Option B | Option C | Option D | Correct Answer (A/B/C/D or 1/2/3/4)
+        // Expected format: Question | Option A | Option B | Option C | Option D | Correct Answer (A/B/C/D or 1/2/3/4) | Explanation | Difficulty
         const question = String(row[0] || '').trim()
         const optionA = String(row[1] || '').trim()
         const optionB = String(row[2] || '').trim()
         const optionC = String(row[3] || '').trim()
         const optionD = String(row[4] || '').trim()
         const correctAnswer = String(row[5] || '').trim().toUpperCase()
+        const explanation = row[6] ? String(row[6]).trim() : undefined
+        const difficultyRaw = row[7] ? String(row[7]).trim().toLowerCase() : undefined
         
         if (!question || !optionA || !optionB || !optionC || !optionD) continue
         
@@ -713,15 +748,23 @@ export function GroupDashboard() {
         else if (correctAnswer === 'C' || correctAnswer === '3') correctIndex = 2
         else if (correctAnswer === 'D' || correctAnswer === '4') correctIndex = 3
         
+        // Parse difficulty
+        let difficulty: 'easy' | 'medium' | 'hard' | undefined = undefined
+        if (difficultyRaw === 'easy' || difficultyRaw === 'সহজ') difficulty = 'easy'
+        else if (difficultyRaw === 'medium' || difficultyRaw === 'মাঝারি') difficulty = 'medium'
+        else if (difficultyRaw === 'hard' || difficultyRaw === 'কঠিন') difficulty = 'hard'
+        
         questions.push({
           question,
           options: [optionA, optionB, optionC, optionD],
-          correctIndex
+          correctIndex,
+          explanation,
+          difficulty
         })
       }
       
       if (questions.length === 0) {
-        setGroupUploadError('No valid questions found. Format: Question | Option 1 | Option 2 | Option 3 | Option 4 | Correct (1/2/3/4)')
+        setGroupUploadError('No valid questions found. Format: Question | Option 1 | Option 2 | Option 3 | Option 4 | Correct (1/2/3/4) | Explanation | Difficulty')
       } else {
         setGroupUploadParsedQuestions(questions)
       }
@@ -750,8 +793,10 @@ export function GroupDashboard() {
       // 3) Option 3
       // 4) Option 4
       // Ans: 1 (or Answer: 1, or সঠিক উত্তর: ১)
+      // Exp: Explanation text (optional)
+      // Diff: easy/medium/hard (optional)
       
-      const questions: Array<{ question: string; options: string[]; correctIndex: number }> = []
+      const questions: Array<{ question: string; options: string[]; correctIndex: number; explanation?: string; difficulty?: 'easy' | 'medium' | 'hard' }> = []
       
       // Split by question numbers (1., 2., 3., etc. or ১., ২., ৩.)
       const questionBlocks = text.split(/(?=\n\s*(?:\d+|[১২৩৪৫৬৭৮৯০]+)[\.\)]\s*)/g)
@@ -776,6 +821,8 @@ export function GroupDashboard() {
         
         const options: string[] = ['', '', '', '']
         let correctIndex = 0
+        let explanation: string | undefined = undefined
+        let difficulty: 'easy' | 'medium' | 'hard' | undefined = undefined
         
         for (const line of lines.slice(1)) {
           // Check if this is an answer line - supports 1/2/3/4 and A/B/C/D
@@ -786,6 +833,23 @@ export function GroupDashboard() {
             else if (ans === '2' || ans === '২' || ans === 'B') correctIndex = 1
             else if (ans === '3' || ans === '৩' || ans === 'C') correctIndex = 2
             else if (ans === '4' || ans === '৪' || ans === 'D') correctIndex = 3
+            continue
+          }
+          
+          // Check for explanation line
+          const expMatch = line.match(/(?:Exp|Explanation|ব্যাখ্যা|Solution)[:\s]*(.*)/i)
+          if (expMatch && expMatch[1].trim()) {
+            explanation = expMatch[1].trim()
+            continue
+          }
+          
+          // Check for difficulty line
+          const diffMatch = line.match(/(?:Diff|Difficulty|Level|কঠিনত্ব)[:\s]*(.*)/i)
+          if (diffMatch) {
+            const diffVal = diffMatch[1].trim().toLowerCase()
+            if (diffVal === 'easy' || diffVal === 'সহজ') difficulty = 'easy'
+            else if (diffVal === 'medium' || diffVal === 'মাঝারি') difficulty = 'medium'
+            else if (diffVal === 'hard' || diffVal === 'কঠিন') difficulty = 'hard'
             continue
           }
           
@@ -816,7 +880,9 @@ export function GroupDashboard() {
           questions.push({
             question: questionLine,
             options,
-            correctIndex
+            correctIndex,
+            explanation,
+            difficulty
           })
         }
       }
@@ -870,6 +936,8 @@ export function GroupDashboard() {
           createdBy: user.id,
           createdByName: user.displayName,
           createdAt: Date.now(),
+          explanation: q.explanation,
+          difficulty: q.difficulty,
         }
         addGroupMCQ(mcq)
         await setDoc(doc(db, 'mcqs', mcq.id), mcq)
@@ -925,21 +993,8 @@ export function GroupDashboard() {
   const handleJoinGroup = async () => {
     if (!joinCode.trim() || !user) return
     
-    // First try local registry
-    let groupToJoin: Group | undefined = findGroupByCode(joinCode.trim())
-    
-    // If not found locally, search Firestore
-    if (!groupToJoin) {
-      try {
-        const q = query(collection(db, 'groups'), where('groupCode', '==', joinCode.trim().toUpperCase()))
-        const querySnapshot = await getDocs(q)
-        if (!querySnapshot.empty) {
-          groupToJoin = querySnapshot.docs[0].data() as Group
-        }
-      } catch (err) {
-        console.error('Error fetching from Firestore:', err)
-      }
-    }
+    // Search in local registry and Firebase
+    let groupToJoin: Group | undefined = await findGroupByCode(joinCode.trim())
     
     if (!groupToJoin) {
       alert('Invalid group code. Please check and try again.')
@@ -994,24 +1049,19 @@ export function GroupDashboard() {
     alert(`Successfully joined "${groupToJoin.name}"!`)
   }
 
-  const handleAddTopic = async () => {
-    if (!newTopicName.trim() || !activeGroupId) return
+  const handleAddTopic = async (topicName?: string) => {
+    const name = topicName || newTopicName
+    if (!name.trim() || !activeGroupId) return
     const topic: GroupTopic = {
       id: uuidv4(),
       groupId: activeGroupId,
-      name: newTopicName.trim(),
+      name: name.trim(),
       order: groupTopics.length + 1,
       createdAt: Date.now(),
     }
     addTopic(topic)
     setNewTopicName('')
-    
-    // Save to Firestore
-    try {
-      await setDoc(doc(db, 'topics', topic.id), topic)
-    } catch (err) {
-      console.error('Error saving topic to Firestore:', err)
-    }
+    // Note: Firestore save is handled by addTopic in group-store
   }
 
   const handleAddChapterItem = (topicId: string) => {
@@ -1203,6 +1253,9 @@ export function GroupDashboard() {
     setAddingToTopicId(null)
   }
 
+  // Get asset store MCQ sync functions
+  const { addSingleMCQ: addAssetMCQ } = useAssetStore()
+
   const handleAddMCQ = (topicId: string) => {
     if (!mcqQuestion.trim() || mcqOptions.some(o => !o.trim()) || !activeGroupId || !user) {
       alert('Please fill all fields')
@@ -1210,6 +1263,21 @@ export function GroupDashboard() {
     }
     // Use first category or create default
     const defaultCategory = groupCategories[0]?.id || 'uncategorized'
+    
+    // First add to Asset Library for centralized storage
+    const { assetId, questionId } = addAssetMCQ(
+      mcqQuestion.trim(),
+      mcqOptions.map(o => o.trim()),
+      mcqCorrect,
+      user.id,
+      'group-subject',  // default subject
+      'group-topic',    // default topic
+      undefined,        // explanation
+      undefined,        // difficulty
+      undefined         // subtopicId
+    )
+    
+    // Then add to Group store with assetRef
     const mcq: GroupMCQ = {
       id: uuidv4(),
       groupId: activeGroupId,
@@ -1690,9 +1758,9 @@ export function GroupDashboard() {
   }
   
   return (
-    <div className="p-6 space-y-4">
-      {/* Header with Group Dropdown */}
-      <div className="flex items-center justify-between">
+    <div className="p-4 sm:p-6 space-y-4 -mx-4 sm:mx-0">
+      {/* Header with Group Dropdown - Desktop only */}
+      <div className="hidden sm:flex flex-row items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <h2 className="text-2xl font-bold">Group Study</h2>
           
@@ -1701,7 +1769,7 @@ export function GroupDashboard() {
             value={activeGroupId || ''} 
             onValueChange={(v) => setActiveGroup(v || null)}
           >
-            <SelectTrigger className="w-[200px]">
+            <SelectTrigger className="w-[200px] h-9">
               <SelectValue placeholder="Select Group" />
             </SelectTrigger>
             <SelectContent>
@@ -1724,14 +1792,39 @@ export function GroupDashboard() {
         </div>
       </div>
 
+      {/* Mobile Header - Compact */}
+      <div className="sm:hidden flex items-center gap-2">
+        <Select 
+          value={activeGroupId || ''} 
+          onValueChange={(v) => setActiveGroup(v || null)}
+        >
+          <SelectTrigger className="flex-1 h-8 text-xs">
+            <SelectValue placeholder="Select Group" />
+          </SelectTrigger>
+          <SelectContent>
+            {myGroups.map(g => (
+              <SelectItem key={g.id} value={g.id}>
+                {g.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button onClick={() => setShowCreateGroup(true)} size="sm" className="h-8 px-2">
+          <Plus className="h-4 w-4" />
+        </Button>
+        <Button variant="outline" onClick={() => setShowJoinGroup(true)} size="sm" className="h-8 px-2">
+          <UserPlus className="h-4 w-4" />
+        </Button>
+      </div>
+
       {/* No Group Selected */}
       {!activeGroupId ? (
-        <Card className="p-12 text-center">
-          <Users className="h-16 w-16 mx-auto text-muted-foreground mb-4" />
-          <h3 className="text-xl font-semibold mb-2">
+        <Card className="p-8 sm:p-12 text-center">
+          <Users className="h-12 w-12 sm:h-16 sm:w-16 mx-auto text-muted-foreground mb-4" />
+          <h3 className="text-lg sm:text-xl font-semibold mb-2">
             {myGroups.length === 0 ? 'No Groups Yet' : 'Select a Group'}
           </h3>
-          <p className="text-muted-foreground">
+          <p className="text-muted-foreground text-sm">
             {myGroups.length === 0 
               ? 'Create a new group or join an existing one!' 
               : 'Choose a group from the dropdown above'}
@@ -1739,26 +1832,25 @@ export function GroupDashboard() {
         </Card>
       ) : (
         <>
-          {/* Group Info Bar */}
-          <div className="flex items-center gap-4 p-3 bg-muted/50 rounded-lg flex-wrap">
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-muted-foreground">Code:</span>
-              <code className="bg-background px-2 py-1 rounded font-mono">{activeGroup?.groupCode}</code>
-              <Button variant="ghost" size="sm" className="h-7 px-2" onClick={copyGroupCode}>
+          {/* Group Info Bar - Mobile friendly */}
+          <div className="flex items-center gap-2 sm:gap-4 p-2 sm:p-3 bg-muted/50 rounded-lg flex-wrap text-sm">
+            <div className="flex items-center gap-1 sm:gap-2">
+              <code className="bg-background px-2 py-0.5 rounded font-mono text-xs">{activeGroup?.groupCode}</code>
+              <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={copyGroupCode}>
                 <Copy className="h-3 w-3" />
               </Button>
               {isAdmin && (
-                <Button variant="ghost" size="sm" className="h-7 px-2 text-blue-500" onClick={syncGroupToCloud} title="Sync to cloud for sharing">
+                <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-blue-500" onClick={syncGroupToCloud} title="Sync to cloud">
                   <Upload className="h-3 w-3" />
                 </Button>
               )}
             </div>
-            <div className="flex items-center gap-2">
-              <Users className="h-4 w-4 text-muted-foreground" />
-              <span className="text-sm">{activeGroup?.members.length} members</span>
+            <div className="flex items-center gap-1">
+              <Users className="h-3.5 w-3.5 text-muted-foreground" />
+              <span className="text-xs sm:text-sm">{activeGroup?.members.length}</span>
             </div>
             {isAdmin && (
-              <span className="flex items-center gap-1 text-sm text-primary">
+              <span className="flex items-center gap-1 text-xs sm:text-sm text-primary">
                 <Crown className="h-3 w-3" /> Admin
               </span>
             )}
@@ -1767,34 +1859,46 @@ export function GroupDashboard() {
               <Button 
                 variant="outline" 
                 size="sm" 
-                className="ml-auto relative"
+                className="ml-auto relative h-7 text-xs"
                 onClick={() => setShowDeleteRequests(true)}
               >
-                <Bell className="h-4 w-4 mr-1" />
-                Delete Requests
-                <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">
+                <Bell className="h-3.5 w-3.5 sm:mr-1" />
+                <span className="hidden sm:inline">Delete Requests</span>
+                <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-4 w-4 flex items-center justify-center text-[10px]">
                   {pendingDeleteRequests.length}
                 </span>
               </Button>
             )}
           </div>
 
-          {/* Tabs */}
-          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)}>
-            <TabsList className="grid w-full grid-cols-4">
-              <TabsTrigger value="whats-new"><Sparkles className="h-4 w-4 mr-1" /> What's New</TabsTrigger>
-              <TabsTrigger value="course"><BookOpen className="h-4 w-4 mr-1" /> Course</TabsTrigger>
-              <TabsTrigger value="live-test"><Brain className="h-4 w-4 mr-1" /> Live Test</TabsTrigger>
-              <TabsTrigger value="settings"><Settings className="h-4 w-4 mr-1" /> Settings</TabsTrigger>
+          {/* Tabs - Hidden on mobile (controlled by bottom nav) */}
+          <Tabs value={activeSubTab} onValueChange={(v) => setActiveSubTab(v as typeof activeSubTab)}>
+            <TabsList className="hidden lg:grid w-full grid-cols-4 h-auto p-1">
+              <TabsTrigger value="whats-new" className="text-xs sm:text-sm py-2 px-1 sm:px-3">
+                <Sparkles className="h-4 w-4 sm:mr-1" />
+                <span className="hidden sm:inline">What's New</span>
+              </TabsTrigger>
+              <TabsTrigger value="course" className="text-xs sm:text-sm py-2 px-1 sm:px-3">
+                <BookOpen className="h-4 w-4 sm:mr-1" />
+                <span className="hidden sm:inline">Course</span>
+              </TabsTrigger>
+              <TabsTrigger value="live-test" className="text-xs sm:text-sm py-2 px-1 sm:px-3">
+                <Brain className="h-4 w-4 sm:mr-1" />
+                <span className="hidden sm:inline">Live Test</span>
+              </TabsTrigger>
+              <TabsTrigger value="settings" className="text-xs sm:text-sm py-2 px-1 sm:px-3">
+                <Settings className="h-4 w-4 sm:mr-1" />
+                <span className="hidden sm:inline">Settings</span>
+              </TabsTrigger>
             </TabsList>
 
             {/* What's New Tab */}
-            <TabsContent value="whats-new" className="space-y-6">
-              <div className="grid md:grid-cols-2 gap-6">
+            <TabsContent value="whats-new" className="space-y-4 sm:space-y-6">
+              <div className="grid gap-4 sm:gap-6 md:grid-cols-2">
                 <Card>
-                  <CardHeader>
-                    <CardTitle className="text-lg flex items-center gap-2">
-                      <FileText className="h-5 w-5 text-blue-500" /> Latest Notes
+                  <CardHeader className="pb-2 sm:pb-4">
+                    <CardTitle className="text-base sm:text-lg flex items-center gap-2">
+                      <FileText className="h-4 w-4 sm:h-5 sm:w-5 text-blue-500" /> Latest Notes
                     </CardTitle>
                   </CardHeader>
                   <CardContent>
@@ -1803,8 +1907,12 @@ export function GroupDashboard() {
                     ) : (
                       <div className="space-y-2">
                         {latestNotes.map(note => (
-                          <div key={note.id} className="p-3 bg-muted/50 rounded-lg">
-                            <h4 className="font-medium">{note.title}</h4>
+                          <div 
+                            key={note.id} 
+                            className="p-3 bg-muted/50 rounded-lg cursor-pointer hover:bg-muted transition-colors"
+                            onClick={() => setViewingContent(note)}
+                          >
+                            <h4 className="font-medium text-sm">{note.title}</h4>
                             <p className="text-xs text-muted-foreground">by {note.createdByName}</p>
                           </div>
                         ))}
@@ -1814,9 +1922,9 @@ export function GroupDashboard() {
                 </Card>
 
                 <Card>
-                  <CardHeader>
-                    <CardTitle className="text-lg flex items-center gap-2">
-                      <HelpCircle className="h-5 w-5 text-green-500" /> Latest MCQs
+                  <CardHeader className="pb-2 sm:pb-4">
+                    <CardTitle className="text-base sm:text-lg flex items-center gap-2">
+                      <HelpCircle className="h-4 w-4 sm:h-5 sm:w-5 text-green-500" /> Latest MCQs
                     </CardTitle>
                   </CardHeader>
                   <CardContent>
@@ -1825,9 +1933,16 @@ export function GroupDashboard() {
                     ) : (
                       <div className="space-y-2">
                         {groupMCQList.slice(0, 5).map(mcq => (
-                          <div key={mcq.id} className="p-3 bg-muted/50 rounded-lg">
-                            <h4 className="font-medium text-sm line-clamp-1">{mcq.question}</h4>
-                            <p className="text-xs text-muted-foreground">by {mcq.createdByName}</p>
+                          <div 
+                            key={mcq.id} 
+                            className="p-2 sm:p-3 bg-muted/50 rounded-lg cursor-pointer hover:bg-muted transition-colors"
+                            onClick={() => {
+                              // Find the quiz content item that contains this MCQ or go to Course tab
+                              setActiveSubTab('course')
+                            }}
+                          >
+                            <h4 className="font-medium text-xs sm:text-sm line-clamp-1">{mcq.question}</h4>
+                            <p className="text-[10px] sm:text-xs text-muted-foreground">by {mcq.createdByName}</p>
                           </div>
                         ))}
                       </div>
@@ -1839,43 +1954,43 @@ export function GroupDashboard() {
               {/* Pending Reports for Content Creators */}
               {pendingReportsForMe.length > 0 && (
                 <Card className="border-orange-500/50 bg-orange-50/50 dark:bg-orange-900/10">
-                  <CardHeader>
-                    <CardTitle className="text-lg flex items-center gap-2 text-orange-600">
-                      <AlertTriangle className="h-5 w-5" /> 
-                      Correction Requests ({pendingReportsForMe.length})
+                  <CardHeader className="pb-2 sm:pb-4">
+                    <CardTitle className="text-base sm:text-lg flex items-center gap-2 text-orange-600">
+                      <AlertTriangle className="h-4 w-4 sm:h-5 sm:w-5" /> 
+                      Correction <span className="hidden sm:inline">Requests</span> ({pendingReportsForMe.length})
                     </CardTitle>
                   </CardHeader>
-                  <CardContent className="space-y-3">
+                  <CardContent className="space-y-2 sm:space-y-3">
                     {pendingReportsForMe.map(report => (
-                      <div key={report.id} className="p-3 bg-white dark:bg-background rounded-lg border space-y-2">
-                        <div className="flex justify-between items-start">
-                          <div>
-                            <p className="font-medium text-sm">{report.contentTitle}</p>
-                            <p className="text-xs text-muted-foreground">
-                              Report by {report.reportedByName} • {new Date(report.createdAt).toLocaleDateString()}
+                      <div key={report.id} className="p-2 sm:p-3 bg-white dark:bg-background rounded-lg border space-y-2">
+                        <div className="flex justify-between items-start gap-2">
+                          <div className="min-w-0 flex-1">
+                            <p className="font-medium text-xs sm:text-sm truncate">{report.contentTitle}</p>
+                            <p className="text-[10px] sm:text-xs text-muted-foreground truncate">
+                              by {report.reportedByName} • {new Date(report.createdAt).toLocaleDateString()}
                             </p>
                           </div>
-                          <span className="text-xs bg-orange-500/20 text-orange-600 px-2 py-1 rounded">
-                            {report.contentType === 'note' ? 'Notes' : report.contentType === 'quiz' ? 'Quiz' : 'Question'}
+                          <span className="text-[10px] sm:text-xs bg-orange-500/20 text-orange-600 px-1.5 sm:px-2 py-0.5 sm:py-1 rounded whitespace-nowrap">
+                            {report.contentType === 'note' ? 'Notes' : report.contentType === 'quiz' ? 'Quiz' : 'Q'}
                           </span>
                         </div>
-                        <p className="text-sm bg-muted p-2 rounded">{report.message}</p>
+                        <p className="text-xs sm:text-sm bg-muted p-2 rounded line-clamp-2">{report.message}</p>
                         <div className="flex gap-2">
                           <Button 
                             size="sm" 
                             variant="outline"
-                            className="text-green-600 hover:bg-green-50"
+                            className="text-green-600 hover:bg-green-50 h-7 text-xs px-2"
                             onClick={() => resolveContentReport(report.id, 'resolved')}
                           >
-                            <Check className="h-3 w-3 mr-1" /> Fixed
+                            <Check className="h-3 w-3 sm:mr-1" /> <span className="hidden sm:inline">Fixed</span>
                           </Button>
                           <Button 
                             size="sm" 
                             variant="outline"
-                            className="text-red-600 hover:bg-red-50"
+                            className="text-red-600 hover:bg-red-50 h-7 text-xs px-2"
                             onClick={() => resolveContentReport(report.id, 'dismissed')}
                           >
-                            <XCircle className="h-3 w-3 mr-1" /> Dismiss
+                            <XCircle className="h-3 w-3 sm:mr-1" /> <span className="hidden sm:inline">Dismiss</span>
                           </Button>
                         </div>
                       </div>
@@ -1884,43 +1999,43 @@ export function GroupDashboard() {
                 </Card>
               )}
 
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <Card className="p-4 text-center">
-                  <div className="text-2xl font-bold text-primary">{groupTopics.length}</div>
-                  <div className="text-sm text-muted-foreground">Chapters</div>
+              {/* Stats Grid - Mobile optimized */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-4">
+                <Card className="p-2 sm:p-4 text-center">
+                  <div className="text-xl sm:text-2xl font-bold text-primary">{groupTopics.length}</div>
+                  <div className="text-xs sm:text-sm text-muted-foreground">Chapters</div>
                 </Card>
-                <Card className="p-4 text-center">
-                  <div className="text-2xl font-bold text-blue-500">
+                <Card className="p-2 sm:p-4 text-center">
+                  <div className="text-xl sm:text-2xl font-bold text-blue-500">
                     {contentItems.filter(ci => ci.groupId === activeGroupId && ci.type === 'note').length}
                   </div>
-                  <div className="text-sm text-muted-foreground">Notes</div>
+                  <div className="text-xs sm:text-sm text-muted-foreground">Notes</div>
                 </Card>
-                <Card className="p-4 text-center">
-                  <div className="text-2xl font-bold text-green-500">{groupMCQList.length}</div>
-                  <div className="text-sm text-muted-foreground">MCQs</div>
+                <Card className="p-2 sm:p-4 text-center">
+                  <div className="text-xl sm:text-2xl font-bold text-green-500">{groupMCQList.length}</div>
+                  <div className="text-xs sm:text-sm text-muted-foreground">MCQs</div>
                 </Card>
-                <Card className="p-4 text-center">
-                  <div className="text-2xl font-bold text-orange-500">{activeGroup?.members.length}</div>
-                  <div className="text-sm text-muted-foreground">Members</div>
+                <Card className="p-2 sm:p-4 text-center">
+                  <div className="text-xl sm:text-2xl font-bold text-orange-500">{activeGroup?.members.length}</div>
+                  <div className="text-xs sm:text-sm text-muted-foreground">Members</div>
                 </Card>
               </div>
             </TabsContent>
 
             {/* Course Tab - Display & Edit Mode */}
-            <TabsContent value="course" className="space-y-4">
+            <TabsContent value="course" className="space-y-3 sm:space-y-4">
               {/* Course Contents Header */}
-              <div className="flex items-center justify-between">
-                <h3 className="font-semibold text-lg">Course Contents</h3>
-                <div className="flex gap-2">
-                  <Button 
-                    variant={isEditMode ? 'default' : 'outline'} 
-                    size="sm"
-                    onClick={() => setIsEditMode(!isEditMode)}
-                  >
-                    <Pencil className="h-4 w-4 mr-2" />
-                    {isEditMode ? 'Exit Edit Mode' : 'Edit Mode'}
-                  </Button>
-                </div>
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="font-semibold text-base sm:text-lg">Course Contents</h3>
+                <Button 
+                  variant={isEditMode ? 'default' : 'outline'} 
+                  size="sm"
+                  className="h-8 text-xs sm:text-sm"
+                  onClick={() => setIsEditMode(!isEditMode)}
+                >
+                  <Pencil className="h-3.5 w-3.5 sm:mr-1.5" />
+                  <span className="hidden sm:inline">{isEditMode ? 'Exit Edit' : 'Edit Mode'}</span>
+                </Button>
               </div>
               
               {/* Add new chapter button - Only in Edit Mode for Admin */}
@@ -1929,8 +2044,7 @@ export function GroupDashboard() {
                   onClick={() => {
                     const name = prompt('Enter chapter name:')
                     if (name?.trim()) {
-                      setNewTopicName(name)
-                      handleAddTopic()
+                      handleAddTopic(name)
                     }
                   }}
                 >
@@ -1986,6 +2100,16 @@ export function GroupDashboard() {
                                 </Button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end">
+                                {isAdmin && (
+                                  <DropdownMenuItem onClick={() => {
+                                    const newName = prompt('Enter new chapter name:', topic.name)
+                                    if (newName?.trim()) {
+                                      updateTopic({ ...topic, name: newName.trim() })
+                                    }
+                                  }}>
+                                    <Pencil className="h-4 w-4 mr-2" /> Rename
+                                  </DropdownMenuItem>
+                                )}
                                 {canEdit && (
                                   <DropdownMenuItem onClick={() => {
                                     setAddingToTopicId(topic.id)
@@ -1996,14 +2120,6 @@ export function GroupDashboard() {
                                 )}
                                 {isAdmin && (
                                   <>
-                                    <DropdownMenuItem onClick={() => {
-                                      const newName = prompt('Enter new chapter name:', topic.name)
-                                      if (newName?.trim()) {
-                                        updateTopic({ ...topic, name: newName.trim() })
-                                      }
-                                    }}>
-                                      <Pencil className="h-4 w-4 mr-2" /> Rename
-                                    </DropdownMenuItem>
                                     <DropdownMenuItem onClick={() => {
                                       // Open assign members modal
                                       setAssigningTopicId(topic.id)
@@ -2034,17 +2150,19 @@ export function GroupDashboard() {
                         {/* Chapter Content - Expanded */}
                         {isExpanded && (
                           <div className="bg-muted/20">
-                            {/* Add content button - Edit Mode Only */}
+                            {/* Add content buttons - Edit Mode Only */}
                             {isEditMode && canEdit && (
-                              <div 
-                                className="flex items-center gap-2 py-2 px-8 hover:bg-muted/30 cursor-pointer text-sm border-b"
-                                onClick={() => {
-                                  setAddingToTopicId(topic.id)
-                                  setShowAddItemModal(true)
-                                }}
-                              >
-                                <Plus className="h-3 w-3 text-primary" />
-                                <span className="text-primary">Add content</span>
+                              <div className="flex items-center gap-4 py-2 px-8 border-b">
+                                <div 
+                                  className="flex items-center gap-2 hover:bg-muted/30 cursor-pointer text-sm px-2 py-1 rounded"
+                                  onClick={() => {
+                                    setAddingToTopicId(topic.id)
+                                    setShowAddItemModal(true)
+                                  }}
+                                >
+                                  <Plus className="h-3 w-3 text-primary" />
+                                  <span className="text-primary">Add content</span>
+                                </div>
                               </div>
                             )}
 
@@ -2107,6 +2225,12 @@ export function GroupDashboard() {
                                           <DropdownMenuItem onClick={() => setEditingContent(item)}>
                                             <FileText className="h-4 w-4 mr-2" /> Edit content
                                           </DropdownMenuItem>
+                                          <DropdownMenuItem onClick={() => {
+                                            setAddingToTopicId(topic.id)
+                                            setShowAddItemModal(true)
+                                          }}>
+                                            <Plus className="h-4 w-4 mr-2" /> Add content
+                                          </DropdownMenuItem>
                                           <DropdownMenuItem 
                                             disabled={itemIndex === 0}
                                             onClick={() => {
@@ -2164,14 +2288,7 @@ export function GroupDashboard() {
                   onClick={() => {
                     const name = prompt('Enter chapter name:')
                     if (name?.trim()) {
-                      const topic: GroupTopic = {
-                        id: uuidv4(),
-                        groupId: activeGroupId!,
-                        name: name.trim(),
-                        order: groupTopics.length + 1,
-                        createdAt: Date.now(),
-                      }
-                      addTopic(topic)
+                      handleAddTopic(name)
                     }
                   }}
                 >
@@ -2185,27 +2302,27 @@ export function GroupDashboard() {
             <TabsContent value="live-test" className="space-y-4">
               {/* If running a live test */}
               {runningLiveTest ? (
-                <Card className="p-6">
-                  <div className="flex justify-between items-center mb-4">
-                    <div className="flex items-center gap-4">
-                      <span className="text-sm font-medium">Question {liveTestCurrentQ + 1} / {liveTestQuestions.length}</span>
-                      <span className="text-sm text-red-500 font-medium">
-                        <Clock className="h-4 w-4 inline mr-1" />
+                <Card className="p-3 sm:p-6">
+                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-3 sm:mb-4">
+                    <div className="flex items-center gap-2 sm:gap-4 text-sm">
+                      <span className="font-medium">Q {liveTestCurrentQ + 1}/{liveTestQuestions.length}</span>
+                      <span className="text-red-500 font-medium">
+                        <Clock className="h-3.5 w-3.5 inline mr-1" />
                         {formatTimeRemaining(runningLiveTest, liveTestStartedAt)}
                       </span>
                     </div>
-                    <Button variant="destructive" size="sm" onClick={submitLiveTest}>
-                      <Check className="h-4 w-4 mr-1" /> Submit Test
+                    <Button variant="destructive" size="sm" className="h-8 text-xs" onClick={submitLiveTest}>
+                      <Check className="h-3.5 w-3.5 sm:mr-1" /> <span className="hidden sm:inline">Submit</span>
                     </Button>
                   </div>
                   
-                  {/* Question Navigator */}
-                  <div className="flex flex-wrap gap-2 mb-4 p-3 bg-muted/50 rounded">
+                  {/* Question Navigator - Compact on mobile */}
+                  <div className="flex flex-wrap gap-1.5 sm:gap-2 mb-3 sm:mb-4 p-2 sm:p-3 bg-muted/50 rounded overflow-x-auto">
                     {liveTestQuestions.map((_, i) => (
                       <button
                         key={i}
                         onClick={() => setLiveTestCurrentQ(i)}
-                        className={`w-8 h-8 rounded text-sm font-medium transition-colors ${
+                        className={`min-w-[28px] w-7 h-7 sm:w-8 sm:h-8 rounded text-xs sm:text-sm font-medium transition-colors ${
                           liveTestCurrentQ === i 
                             ? 'bg-primary text-primary-foreground' 
                             : liveTestAnswers[liveTestQuestions[i].id] !== undefined
@@ -2218,12 +2335,12 @@ export function GroupDashboard() {
                     ))}
                   </div>
                   
-                  <h3 className="text-lg font-medium mb-4">{liveTestQuestions[liveTestCurrentQ]?.question}</h3>
+                  <h3 className="text-base sm:text-lg font-medium mb-3 sm:mb-4">{liveTestQuestions[liveTestCurrentQ]?.question}</h3>
                   <div className="space-y-2">
                     {liveTestQuestions[liveTestCurrentQ]?.options.map((opt, i) => (
                       <div 
                         key={i}
-                        className={`p-3 border rounded cursor-pointer transition-colors ${
+                        className={`p-2.5 sm:p-3 border rounded cursor-pointer transition-colors text-sm ${
                           liveTestAnswers[liveTestQuestions[liveTestCurrentQ].id] === i 
                             ? 'border-primary bg-primary/10' 
                             : 'hover:bg-muted'
@@ -2234,34 +2351,40 @@ export function GroupDashboard() {
                       </div>
                     ))}
                   </div>
-                  <div className="flex justify-between pt-4">
+                  <div className="flex justify-between pt-3 sm:pt-4">
                     <Button 
                       variant="outline" 
+                      size="sm"
+                      className="h-8 text-xs sm:text-sm"
                       disabled={liveTestCurrentQ === 0} 
                       onClick={() => setLiveTestCurrentQ(p => p - 1)}
                     >
-                      Previous
+                      <ChevronLeft className="h-4 w-4" />
+                      <span className="hidden sm:inline ml-1">Previous</span>
                     </Button>
                     {liveTestCurrentQ < liveTestQuestions.length - 1 ? (
-                      <Button onClick={() => setLiveTestCurrentQ(p => p + 1)}>Next</Button>
+                      <Button size="sm" className="h-8 text-xs sm:text-sm" onClick={() => setLiveTestCurrentQ(p => p + 1)}>
+                        <span className="hidden sm:inline mr-1">Next</span>
+                        <ChevronRight className="h-4 w-4" />
+                      </Button>
                     ) : (
-                      <Button onClick={submitLiveTest}>
-                        <Check className="h-4 w-4 mr-1" /> Submit
+                      <Button size="sm" className="h-8 text-xs sm:text-sm" onClick={submitLiveTest}>
+                        <Check className="h-3.5 w-3.5 mr-1" /> Submit
                       </Button>
                     )}
                   </div>
                 </Card>
               ) : viewingLiveTestSolutions && viewingLiveTestResult ? (
                 /* View Solutions Mode */
-                <Card className="p-6">
-                  <div className="flex justify-between items-center mb-6">
-                    <h3 className="text-lg font-semibold">View Solutions</h3>
-                    <Button variant="outline" onClick={() => setViewingLiveTestSolutions(false)}>
-                      <X className="h-4 w-4 mr-1" /> Close
+                <Card className="p-3 sm:p-6">
+                  <div className="flex justify-between items-center mb-4 sm:mb-6">
+                    <h3 className="text-base sm:text-lg font-semibold">View Solutions</h3>
+                    <Button variant="outline" size="sm" className="h-8" onClick={() => setViewingLiveTestSolutions(false)}>
+                      <X className="h-3.5 w-3.5 sm:mr-1" /> <span className="hidden sm:inline">Close</span>
                     </Button>
                   </div>
                   
-                  <div className="space-y-6">
+                  <div className="space-y-4 sm:space-y-6">
                     {viewingLiveTestResult.answers.map((ans, idx) => {
                       const question = groupMCQs.find(q => q.id === ans.questionId)
                       if (!question) return null
@@ -2270,23 +2393,23 @@ export function GroupDashboard() {
                       const wasSkipped = ans.selected === null
                       
                       return (
-                        <div key={ans.questionId} className={`p-4 rounded-lg border ${isCorrect ? 'border-green-500 bg-green-50 dark:bg-green-950/20' : wasSkipped ? 'border-gray-400 bg-gray-50 dark:bg-gray-950/20' : 'border-red-500 bg-red-50 dark:bg-red-950/20'}`}>
-                          <div className="flex items-start justify-between mb-3">
-                            <span className="text-sm font-medium">Q{idx + 1}.</span>
+                        <div key={ans.questionId} className={`p-3 sm:p-4 rounded-lg border ${isCorrect ? 'border-green-500 bg-green-50 dark:bg-green-950/20' : wasSkipped ? 'border-gray-400 bg-gray-50 dark:bg-gray-950/20' : 'border-red-500 bg-red-50 dark:bg-red-950/20'}`}>
+                          <div className="flex items-start justify-between mb-2 sm:mb-3">
+                            <span className="text-xs sm:text-sm font-medium">Q{idx + 1}.</span>
                             {isCorrect ? (
-                              <span className="text-green-600 text-sm flex items-center"><CheckCircle2 className="h-4 w-4 mr-1" /> Correct</span>
+                              <span className="text-green-600 text-xs sm:text-sm flex items-center"><CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Correct</span>
                             ) : wasSkipped ? (
-                              <span className="text-gray-500 text-sm flex items-center"><CircleDot className="h-4 w-4 mr-1" /> Skipped</span>
+                              <span className="text-gray-500 text-xs sm:text-sm flex items-center"><CircleDot className="h-3.5 w-3.5 mr-1" /> Skipped</span>
                             ) : (
-                              <span className="text-red-600 text-sm flex items-center"><XCircle className="h-4 w-4 mr-1" /> Wrong</span>
+                              <span className="text-red-600 text-xs sm:text-sm flex items-center"><XCircle className="h-3.5 w-3.5 mr-1" /> Wrong</span>
                             )}
                           </div>
-                          <p className="font-medium mb-3">{question.question}</p>
-                          <div className="space-y-2">
+                          <p className="font-medium mb-2 sm:mb-3 text-sm sm:text-base">{question.question}</p>
+                          <div className="space-y-1.5 sm:space-y-2">
                             {question.options.map((opt, i) => (
                               <div 
                                 key={i} 
-                                className={`p-2 rounded text-sm ${
+                                className={`p-1.5 sm:p-2 rounded text-xs sm:text-sm ${
                                   i === ans.correct 
                                     ? 'bg-green-200 dark:bg-green-900 font-medium' 
                                     : ans.selected === i && !isCorrect
@@ -2294,10 +2417,10 @@ export function GroupDashboard() {
                                       : ''
                                 }`}
                               >
-                                <span className="font-medium mr-2">{String.fromCharCode(65 + i)}.</span>
+                                <span className="font-medium mr-1.5 sm:mr-2">{String.fromCharCode(65 + i)}.</span>
                                 {opt}
-                                {i === ans.correct && <Check className="h-4 w-4 inline ml-2 text-green-600" />}
-                                {ans.selected === i && !isCorrect && <X className="h-4 w-4 inline ml-2 text-red-600" />}
+                                {i === ans.correct && <Check className="h-3.5 w-3.5 inline ml-1.5 text-green-600" />}
+                                {ans.selected === i && !isCorrect && <X className="h-3.5 w-3.5 inline ml-1.5 text-red-600" />}
                               </div>
                             ))}
                           </div>
@@ -2312,20 +2435,22 @@ export function GroupDashboard() {
                   {/* Auto Daily Test Banner */}
                   {isAutoTestActive && currentAutoTestConfig && (
                     <Card className="border-2 border-green-500 bg-green-50 dark:bg-green-900/20">
-                      <CardContent className="p-4">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse" />
+                      <CardContent className="p-3 sm:p-4">
+                        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-3">
+                          <div className="flex items-center gap-2 sm:gap-3">
+                            <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 bg-green-500 rounded-full animate-pulse" />
                             <div>
-                              <h4 className="font-semibold text-green-700 dark:text-green-400">
+                              <h4 className="font-semibold text-sm sm:text-base text-green-700 dark:text-green-400">
                                 {currentAutoTestConfig.title}
                               </h4>
-                              <p className="text-sm text-muted-foreground">
-                                {currentAutoTestConfig.questionCount} questions • {currentAutoTestConfig.duration} min
+                              <p className="text-xs sm:text-sm text-muted-foreground">
+                                {currentAutoTestConfig.questionCount} Q • {currentAutoTestConfig.duration} min
                               </p>
                             </div>
                           </div>
                           <Button 
+                            size="sm"
+                            className="h-8 text-xs sm:text-sm w-full sm:w-auto bg-green-600 hover:bg-green-700"
                             onClick={() => {
                               // Generate questions from categories
                               let availableQuestions = groupMCQList.filter(q => 
@@ -2366,7 +2491,6 @@ export function GroupDashboard() {
                               setLiveTestCurrentQ(0)
                               setLiveTestAnswers({})
                             }}
-                            className="bg-green-600 hover:bg-green-700"
                           >
                             <Play className="h-4 w-4 mr-2" />
                             Start Daily Test
@@ -2696,45 +2820,125 @@ export function GroupDashboard() {
             </TabsContent>
 
             {/* Settings Tab */}
-            <TabsContent value="settings" className="space-y-4">
+            <TabsContent value="settings" className="space-y-3 sm:space-y-4">
               {/* Page Title */}
               <div className="flex items-center gap-2 mb-2">
-                <Settings className="h-5 w-5 text-primary" />
-                <h2 className="text-lg font-semibold">Group Settings</h2>
+                <Settings className="h-4 w-4 sm:h-5 sm:w-5 text-primary" />
+                <h2 className="text-base sm:text-lg font-semibold">Group Settings</h2>
               </div>
 
               {/* Members Section - Everyone can see */}
               <Card className="border-2">
-                <CardHeader className="pb-3">
-                  <div className="flex items-center justify-between">
-                    <CardTitle className="flex items-center gap-2 text-base">
-                      <Users className="h-5 w-5 text-blue-500" />
+                <CardHeader className="pb-2 sm:pb-3 px-3 sm:px-6">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+                    <CardTitle className="flex items-center gap-2 text-sm sm:text-base">
+                      <Users className="h-4 w-4 sm:h-5 sm:w-5 text-blue-500" />
                       Members
                       <span className="bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs px-2 py-0.5 rounded-full">
                         {activeGroup?.members.length}
                       </span>
                     </CardTitle>
-                    <Button variant="outline" size="sm" onClick={copyGroupCode} className="h-8">
-                      <Copy className="h-3.5 w-3.5 mr-1.5" /> Invite Code
+                    <Button variant="outline" size="sm" onClick={copyGroupCode} className="h-7 text-xs">
+                      <Copy className="h-3 w-3 sm:mr-1.5" /> <span className="hidden sm:inline">Invite Code</span>
                     </Button>
                   </div>
                 </CardHeader>
-                <CardContent className="pt-0">
+                <CardContent className="pt-0 px-3 sm:px-6">
                   <div className="grid gap-2 sm:grid-cols-2">
-                    {activeGroup?.members.map(member => (
-                      <div key={member.userId} className="flex items-center justify-between p-2.5 bg-muted/50 rounded-lg">
-                        <div className="flex items-center gap-2.5">
-                          <Avatar className="h-8 w-8">
-                            <AvatarFallback className="text-sm">{member.name.charAt(0)}</AvatarFallback>
-                          </Avatar>
-                          <div>
-                            <p className="font-medium text-sm leading-tight">{member.name}</p>
-                            <p className="text-[10px] text-muted-foreground capitalize">{member.role}</p>
+                    {activeGroup?.members.map(member => {
+                      const isSelf = member.userId === user?.id;
+                      const isOnlyAdmin = activeGroup.members.filter(m => m.role === 'admin').length === 1 && member.role === 'admin';
+                      
+                      return (
+                        <div key={member.userId} className="flex items-center justify-between p-2 sm:p-2.5 bg-muted/50 rounded-lg">
+                          <div className="flex items-center gap-2">
+                            <Avatar className="h-7 w-7 sm:h-8 sm:w-8">
+                              <AvatarFallback className="text-xs sm:text-sm">{member.name.charAt(0)}</AvatarFallback>
+                            </Avatar>
+                            <div>
+                              <p className="font-medium text-xs sm:text-sm leading-tight">
+                                {member.name} {isSelf && <span className="text-muted-foreground">(You)</span>}
+                              </p>
+                              <p className="text-[10px] text-muted-foreground capitalize">{member.role}</p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            {member.role === 'admin' && <Crown className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-yellow-500" />}
+                            
+                            {/* Admin actions - not on self if only admin */}
+                            {isAdmin && !isSelf && (
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0">
+                                    <MoreVertical className="h-3.5 w-3.5" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-40">
+                                  {/* Role change options */}
+                                  {member.role !== 'admin' && (
+                                    <DropdownMenuItem
+                                      onClick={() => {
+                                        const updatedMembers = activeGroup.members.map(m => 
+                                          m.userId === member.userId ? { ...m, role: 'admin' as const } : m
+                                        );
+                                        updateGroup({ ...activeGroup, members: updatedMembers });
+                                      }}
+                                    >
+                                      <Crown className="h-3.5 w-3.5 mr-2 text-yellow-500" />
+                                      Make Admin
+                                    </DropdownMenuItem>
+                                  )}
+                                  {member.role === 'admin' && !isOnlyAdmin && (
+                                    <DropdownMenuItem
+                                      onClick={() => {
+                                        const updatedMembers = activeGroup.members.map(m => 
+                                          m.userId === member.userId ? { ...m, role: 'member' as const } : m
+                                        );
+                                        updateGroup({ ...activeGroup, members: updatedMembers });
+                                      }}
+                                    >
+                                      <Users className="h-3.5 w-3.5 mr-2" />
+                                      Make Member
+                                    </DropdownMenuItem>
+                                  )}
+                                  {member.role !== 'moderator' && (
+                                    <DropdownMenuItem
+                                      onClick={() => {
+                                        const updatedMembers = activeGroup.members.map(m => 
+                                          m.userId === member.userId ? { ...m, role: 'moderator' as const } : m
+                                        );
+                                        updateGroup({ ...activeGroup, members: updatedMembers });
+                                      }}
+                                    >
+                                      <Settings className="h-3.5 w-3.5 mr-2 text-blue-500" />
+                                      Make Moderator
+                                    </DropdownMenuItem>
+                                  )}
+                                  {/* Remove member */}
+                                  <DropdownMenuItem
+                                    className="text-red-600 focus:text-red-600"
+                                    onClick={() => {
+                                      if (confirm(`Remove ${member.name} from this group?`)) {
+                                        const updatedMembers = activeGroup.members.filter(m => m.userId !== member.userId);
+                                        const updatedMemberIds = activeGroup.memberIds.filter(id => id !== member.userId);
+                                        updateGroup({ 
+                                          ...activeGroup, 
+                                          members: updatedMembers,
+                                          memberIds: updatedMemberIds
+                                        });
+                                      }
+                                    }}
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5 mr-2" />
+                                    Remove
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            )}
                           </div>
                         </div>
-                        {member.role === 'admin' && <Crown className="h-4 w-4 text-yellow-500" />}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </CardContent>
               </Card>
@@ -2744,36 +2948,36 @@ export function GroupDashboard() {
                 <>
                 {/* Live Test Management */}
                 <Card className="border-2 border-green-200 dark:border-green-800">
-                  <CardHeader className="pb-3">
-                    <CardTitle className="flex items-center gap-2 text-base">
-                      <Brain className="h-5 w-5 text-green-500" />
+                  <CardHeader className="pb-2 sm:pb-3 px-3 sm:px-6">
+                    <CardTitle className="flex items-center gap-2 text-sm sm:text-base">
+                      <Brain className="h-4 w-4 sm:h-5 sm:w-5 text-green-500" />
                       Live Test Management
                     </CardTitle>
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-[10px] sm:text-xs text-muted-foreground">
                       Schedule and manage live tests
                     </p>
                   </CardHeader>
-                  <CardContent className="pt-0 space-y-4">
+                  <CardContent className="pt-0 px-3 sm:px-6 space-y-3 sm:space-y-4">
                     {/* Tab Buttons */}
                     <div className="flex gap-2">
                       <Button 
                         variant={liveTestMgmtTab === 'schedule' ? 'default' : 'outline'}
                         size="sm"
+                        className="flex-1 sm:flex-none h-8 text-xs"
                         onClick={() => setLiveTestMgmtTab('schedule')}
-                        className="flex-1 sm:flex-none"
                       >
-                        <Calendar className="h-4 w-4 mr-1.5" />
-                        Schedule
+                        <Calendar className="h-3.5 w-3.5 sm:mr-1.5" />
+                        <span className="hidden sm:inline">Schedule</span>
                       </Button>
                       <Button 
                         variant={liveTestMgmtTab === 'auto' ? 'default' : 'outline'}
                         size="sm"
+                        className="flex-1 sm:flex-none h-8 text-xs"
                         onClick={() => setLiveTestMgmtTab('auto')}
-                        className="flex-1 sm:flex-none"
                       >
-                        <RefreshCw className="h-4 w-4 mr-1.5" />
-                        Auto Daily
-                        {autoTestEnabled && <span className="ml-1.5 w-2 h-2 bg-green-500 rounded-full" />}
+                        <RefreshCw className="h-3.5 w-3.5 sm:mr-1.5" />
+                        <span className="hidden sm:inline">Auto Daily</span>
+                        {autoTestEnabled && <span className="ml-1 sm:ml-1.5 w-2 h-2 bg-green-500 rounded-full" />}
                       </Button>
                     </div>
                     
@@ -3338,16 +3542,18 @@ export function GroupDashboard() {
                         
                         {/* File Format Info */}
                         <div className="text-xs bg-white dark:bg-gray-900 p-3 rounded border space-y-2">
-                          <p className="font-medium">📄 Excel Format (6 columns):</p>
-                          <p className="text-muted-foreground pl-2">Question | Option 1 | Option 2 | Option 3 | Option 4 | Correct (1/2/3/4)</p>
-                          <p className="font-medium mt-2">� Word Format:</p>
+                          <p className="font-medium">📄 Excel Format (8 columns):</p>
+                          <p className="text-muted-foreground pl-2">Question | Option 1 | Option 2 | Option 3 | Option 4 | Correct (1/2/3/4) | Explanation | Difficulty (easy/medium/hard)</p>
+                          <p className="font-medium mt-2">📝 Word Format:</p>
                           <div className="text-muted-foreground pl-2 whitespace-pre-line">
 {`1. Question text here
 1) Option 1
 2) Option 2
 3) Option 3
 4) Option 4
-Ans: 1`}
+Ans: 1
+Exp: ব্যাখ্যা (optional)
+Diff: medium (optional)`}
                           </div>
                         </div>
                         
@@ -3993,53 +4199,73 @@ Ans: 1`}
         </>
       )}
 
-      {/* Create Group Dialog */}
+      {/* Create Group Dialog - Mobile optimized */}
       {showCreateGroup && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <Card className="w-full max-w-md">
-            <CardHeader><CardTitle>Create New Group</CardTitle></CardHeader>
-            <CardContent className="space-y-4">
-              <Input placeholder="Group Name" value={newGroupName} onChange={e => setNewGroupName(e.target.value)} />
-              <Input placeholder="Description (optional)" value={newGroupDesc} onChange={e => setNewGroupDesc(e.target.value)} />
-              <div className="flex gap-2 justify-end">
-                <Button variant="outline" onClick={() => setShowCreateGroup(false)}>Cancel</Button>
-                <Button onClick={handleCreateGroup}>Create</Button>
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center">
+          <Card className="w-full sm:max-w-md rounded-t-2xl sm:rounded-xl mx-0 sm:mx-4">
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-lg">Create New Group</CardTitle>
+                <Button variant="ghost" size="sm" className="h-8 w-8 p-0 sm:hidden" onClick={() => setShowCreateGroup(false)}>
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3 pb-6">
+              <Input className="h-10" placeholder="Group Name" value={newGroupName} onChange={e => setNewGroupName(e.target.value)} />
+              <Input className="h-10" placeholder="Description (optional)" value={newGroupDesc} onChange={e => setNewGroupDesc(e.target.value)} />
+              <div className="flex gap-2 pt-2">
+                <Button variant="outline" className="flex-1 h-10" onClick={() => setShowCreateGroup(false)}>Cancel</Button>
+                <Button className="flex-1 h-10" onClick={handleCreateGroup}>Create</Button>
               </div>
             </CardContent>
           </Card>
         </div>
       )}
 
-      {/* Join Group Dialog */}
+      {/* Join Group Dialog - Mobile optimized */}
       {showJoinGroup && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <Card className="w-full max-w-md">
-            <CardHeader><CardTitle>Join Group</CardTitle></CardHeader>
-            <CardContent className="space-y-4">
-              <Input placeholder="Enter Group Code" value={joinCode} onChange={e => setJoinCode(e.target.value.toUpperCase())} maxLength={6} />
-              <div className="flex gap-2 justify-end">
-                <Button variant="outline" onClick={() => setShowJoinGroup(false)}>Cancel</Button>
-                <Button onClick={handleJoinGroup}>Join</Button>
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center">
+          <Card className="w-full sm:max-w-md rounded-t-2xl sm:rounded-xl mx-0 sm:mx-4">
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-lg">Join Group</CardTitle>
+                <Button variant="ghost" size="sm" className="h-8 w-8 p-0 sm:hidden" onClick={() => setShowJoinGroup(false)}>
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3 pb-6">
+              <Input className="h-12 text-center text-xl tracking-widest font-mono uppercase" placeholder="Enter Code" value={joinCode} onChange={e => setJoinCode(e.target.value.toUpperCase())} maxLength={6} />
+              <p className="text-xs text-center text-muted-foreground">Enter the 6-character group code</p>
+              <div className="flex gap-2 pt-2">
+                <Button variant="outline" className="flex-1 h-10" onClick={() => setShowJoinGroup(false)}>Cancel</Button>
+                <Button className="flex-1 h-10" onClick={handleJoinGroup}>Join</Button>
               </div>
             </CardContent>
           </Card>
         </div>
       )}
 
-      {/* Edit Content Modal */}
+      {/* Edit Content Modal - Mobile fullscreen */}
       {editingContent && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <Card className="w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
-            <CardHeader className="flex-row items-center justify-between">
-              <CardTitle>Edit: {editingContent.title}</CardTitle>
-              <Button 
-                variant={showEditSourceCode ? "default" : "outline"} 
-                size="sm"
-                onClick={() => setShowEditSourceCode(!showEditSourceCode)}
-                className="h-8"
-              >
-                <Code className="h-4 w-4 mr-1" /> Source
-              </Button>
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center">
+          <Card className="w-full sm:max-w-2xl h-[95vh] sm:h-auto sm:max-h-[90vh] overflow-hidden flex flex-col rounded-t-2xl sm:rounded-xl">
+            <CardHeader className="flex-row items-center justify-between py-3 px-4">
+              <CardTitle className="text-base sm:text-lg truncate pr-2">Edit: {editingContent.title}</CardTitle>
+              <div className="flex items-center gap-2">
+                <Button 
+                  variant={showEditSourceCode ? "default" : "outline"} 
+                  size="sm"
+                  onClick={() => setShowEditSourceCode(!showEditSourceCode)}
+                  className="h-8"
+                >
+                  <Code className="h-4 w-4 sm:mr-1" /><span className="hidden sm:inline">Source</span>
+                </Button>
+                <Button variant="ghost" size="sm" className="h-8 w-8 p-0 sm:hidden" onClick={() => { setEditingContent(null); setShowEditSourceCode(false) }}>
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
             </CardHeader>
             <CardContent className="flex-1 overflow-y-auto space-y-4">
               {showEditSourceCode ? (
@@ -4088,94 +4314,148 @@ Ans: 1`}
       )}
 
 
-      {/* Sahityapath Style Add Item Modal */}
+      {/* Sahityapath Style Add Item Modal - Mobile bottom sheet */}
       {showAddItemModal && addingToTopicId && !showItemDetailModal && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <Card className="w-full max-w-md">
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center">
+          <Card className="w-full sm:max-w-md rounded-t-2xl sm:rounded-xl">
             <div className="flex justify-between items-center p-4 border-b">
-              <h3 className="font-semibold text-lg">Create new item</h3>
-              <Button 
-                variant="ghost" 
-                size="sm" 
-                className="h-8 w-8 p-0"
-                onClick={() => {
-                  setShowAddItemModal(false)
-                  setAddingToTopicId(null)
-                  setNewItemName('')
-                  setNewItemType('note')
-                }}
-              >
-                <X className="h-4 w-4" />
-              </Button>
+              <h3 className="font-semibold text-lg">
+                {addContentMode === 'choose' ? 'Add Content' : addContentMode === 'manual' ? 'Create new item' : 'Import from Library'}
+              </h3>
+              <div className="flex items-center gap-1">
+                {addContentMode !== 'choose' && (
+                  <Button 
+                    variant="ghost" 
+                    size="sm" 
+                    className="h-8 w-8 p-0"
+                    onClick={() => setAddContentMode('choose')}
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                  </Button>
+                )}
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  className="h-8 w-8 p-0"
+                  onClick={() => {
+                    setShowAddItemModal(false)
+                    setAddingToTopicId(null)
+                    setNewItemName('')
+                    setNewItemType('note')
+                    setAddContentMode('choose')
+                  }}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
             
             <CardContent className="p-4">
-              <div className="space-y-2">
-                <div 
-                  className="flex items-start gap-3 p-3 rounded hover:bg-primary/10 cursor-pointer border border-transparent hover:border-primary/30 transition-colors"
-                  onClick={() => openItemDetailModal('heading')}
-                >
-                  <div className="mt-0.5 w-4 h-4 rounded-full border-2 border-primary" />
-                  <div>
-                    <div className="font-medium flex items-center gap-2">
-                      <Heading className="h-4 w-4 text-purple-500" /> Heading
+              {/* Step 1: Choose mode - Manually or Import from Library */}
+              {addContentMode === 'choose' && (
+                <div className="space-y-3">
+                  <div 
+                    className="flex items-center gap-4 p-4 rounded-lg hover:bg-primary/10 cursor-pointer border border-transparent hover:border-primary/30 transition-colors"
+                    onClick={() => setAddContentMode('manual')}
+                  >
+                    <div className="w-12 h-12 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center">
+                      <Plus className="h-6 w-6 text-blue-600 dark:text-blue-400" />
                     </div>
-                    <p className="text-sm text-muted-foreground">Define chapter section headings</p>
+                    <div>
+                      <div className="font-medium text-lg">Manually</div>
+                      <p className="text-sm text-muted-foreground">Create new content from scratch</p>
+                    </div>
+                  </div>
+                  
+                  <div 
+                    className="flex items-center gap-4 p-4 rounded-lg hover:bg-primary/10 cursor-pointer border border-transparent hover:border-primary/30 transition-colors"
+                    onClick={() => {
+                      setShowAddItemModal(false)
+                      setAddContentMode('choose')
+                      setShowImportFromLibrary(true)
+                      setImportTargetTopicId(addingToTopicId)
+                    }}
+                  >
+                    <div className="w-12 h-12 rounded-full bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center">
+                      <Library className="h-6 w-6 text-purple-600 dark:text-purple-400" />
+                    </div>
+                    <div>
+                      <div className="font-medium text-lg">Import from Library</div>
+                      <p className="text-sm text-muted-foreground">Import MCQs or Notes from your library</p>
+                    </div>
                   </div>
                 </div>
-                
-                <div 
-                  className="flex items-start gap-3 p-3 rounded hover:bg-primary/10 cursor-pointer border border-transparent hover:border-primary/30 transition-colors"
-                  onClick={() => openItemDetailModal('note')}
-                >
-                  <div className="mt-0.5 w-4 h-4 rounded-full border-2 border-primary" />
-                  <div>
-                    <div className="font-medium flex items-center gap-2">
-                      <FileText className="h-4 w-4 text-blue-500" /> PDF / Images
+              )}
+
+              {/* Step 2: Manual content type selection */}
+              {addContentMode === 'manual' && (
+                <div className="space-y-2">
+                  <div 
+                    className="flex items-start gap-3 p-3 rounded hover:bg-primary/10 cursor-pointer border border-transparent hover:border-primary/30 transition-colors"
+                    onClick={() => openItemDetailModal('heading')}
+                  >
+                    <div className="mt-0.5 w-4 h-4 rounded-full border-2 border-primary" />
+                    <div>
+                      <div className="font-medium flex items-center gap-2">
+                        <Heading className="h-4 w-4 text-purple-500" /> Heading
+                      </div>
+                      <p className="text-sm text-muted-foreground">Define chapter section headings</p>
                     </div>
-                    <p className="text-sm text-muted-foreground">Upload PDF or image files</p>
+                  </div>
+                  
+                  <div 
+                    className="flex items-start gap-3 p-3 rounded hover:bg-primary/10 cursor-pointer border border-transparent hover:border-primary/30 transition-colors"
+                    onClick={() => openItemDetailModal('note')}
+                  >
+                    <div className="mt-0.5 w-4 h-4 rounded-full border-2 border-primary" />
+                    <div>
+                      <div className="font-medium flex items-center gap-2">
+                        <FileText className="h-4 w-4 text-blue-500" /> PDF / Images
+                      </div>
+                      <p className="text-sm text-muted-foreground">Upload PDF or image files</p>
+                    </div>
+                  </div>
+                  
+                  <div 
+                    className="flex items-start gap-3 p-3 rounded hover:bg-primary/10 cursor-pointer border border-transparent hover:border-primary/30 transition-colors"
+                    onClick={() => openItemDetailModal('text')}
+                  >
+                    <div className="mt-0.5 w-4 h-4 rounded-full border-2 border-primary" />
+                    <div>
+                      <div className="font-medium flex items-center gap-2">
+                        <Type className="h-4 w-4 text-orange-500" /> Text
+                      </div>
+                      <p className="text-sm text-muted-foreground">Add custom text or iFrame and HTML</p>
+                    </div>
+                  </div>
+                  
+                  <div 
+                    className="flex items-start gap-3 p-3 rounded hover:bg-primary/10 cursor-pointer border border-transparent hover:border-primary/30 transition-colors"
+                    onClick={() => openItemDetailModal('link')}
+                  >
+                    <div className="mt-0.5 w-4 h-4 rounded-full border-2 border-primary" />
+                    <div>
+                      <div className="font-medium flex items-center gap-2">
+                        <Link className="h-4 w-4 text-cyan-500" /> Link (Video, Website etc.)
+                      </div>
+                      <p className="text-sm text-muted-foreground">Add link which will be embedded in iFrame</p>
+                    </div>
+                  </div>
+                  
+                  <div 
+                    className="flex items-start gap-3 p-3 rounded hover:bg-primary/10 cursor-pointer border border-transparent hover:border-primary/30 transition-colors"
+                    onClick={() => openItemDetailModal('quiz')}
+                  >
+                    <div className="mt-0.5 w-4 h-4 rounded-full border-2 border-primary" />
+                    <div>
+                      <div className="font-medium flex items-center gap-2">
+                        <HelpCircle className="h-4 w-4 text-green-500" /> Quiz
+                      </div>
+                      <p className="text-sm text-muted-foreground">Learners can attempt any time & get results</p>
+                    </div>
                   </div>
                 </div>
-                
-                <div 
-                  className="flex items-start gap-3 p-3 rounded hover:bg-primary/10 cursor-pointer border border-transparent hover:border-primary/30 transition-colors"
-                  onClick={() => openItemDetailModal('text')}
-                >
-                  <div className="mt-0.5 w-4 h-4 rounded-full border-2 border-primary" />
-                  <div>
-                    <div className="font-medium flex items-center gap-2">
-                      <Type className="h-4 w-4 text-orange-500" /> Text
-                    </div>
-                    <p className="text-sm text-muted-foreground">Add custom text or iFrame and HTML</p>
-                  </div>
-                </div>
-                
-                <div 
-                  className="flex items-start gap-3 p-3 rounded hover:bg-primary/10 cursor-pointer border border-transparent hover:border-primary/30 transition-colors"
-                  onClick={() => openItemDetailModal('link')}
-                >
-                  <div className="mt-0.5 w-4 h-4 rounded-full border-2 border-primary" />
-                  <div>
-                    <div className="font-medium flex items-center gap-2">
-                      <Link className="h-4 w-4 text-cyan-500" /> Link (Video, Website etc.)
-                    </div>
-                    <p className="text-sm text-muted-foreground">Add link which will be embedded in iFrame</p>
-                  </div>
-                </div>
-                
-                <div 
-                  className="flex items-start gap-3 p-3 rounded hover:bg-primary/10 cursor-pointer border border-transparent hover:border-primary/30 transition-colors"
-                  onClick={() => openItemDetailModal('quiz')}
-                >
-                  <div className="mt-0.5 w-4 h-4 rounded-full border-2 border-primary" />
-                  <div>
-                    <div className="font-medium flex items-center gap-2">
-                      <HelpCircle className="h-4 w-4 text-green-500" /> Quiz
-                    </div>
-                    <p className="text-sm text-muted-foreground">Learners can attempt any time & get results</p>
-                  </div>
-                </div>
-              </div>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -4564,20 +4844,20 @@ Ans: 1`}
         </div>
       )}
 
-      {/* Content Viewer Modal - Display Mode */}
+      {/* Content Viewer Modal - Mobile fullscreen */}
       {viewingContent && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <Card className="w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
-            <CardHeader className="flex flex-row items-center justify-between border-b">
-              <CardTitle className="flex items-center gap-2">
-                <FileText className="h-5 w-5 text-blue-500" />
-                {viewingContent.title}
+        <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50">
+          <Card className="w-full sm:max-w-4xl h-[95vh] sm:h-auto sm:max-h-[90vh] overflow-hidden flex flex-col rounded-t-2xl sm:rounded-xl sm:mx-4">
+            <CardHeader className="flex flex-row items-center justify-between border-b py-3 px-4">
+              <CardTitle className="flex items-center gap-2 text-base sm:text-lg truncate">
+                <FileText className="h-4 w-4 sm:h-5 sm:w-5 text-blue-500 shrink-0" />
+                <span className="truncate">{viewingContent.title}</span>
               </CardTitle>
-              <Button variant="ghost" size="sm" onClick={() => setViewingContent(null)}>
+              <Button variant="ghost" size="sm" className="h-8 w-8 p-0 shrink-0" onClick={() => setViewingContent(null)}>
                 <X className="h-4 w-4" />
               </Button>
             </CardHeader>
-            <CardContent className="overflow-y-auto p-6">
+            <CardContent className="overflow-y-auto p-4 sm:p-6 flex-1">
               {viewingContent.type === 'note' && viewingContent.content ? (
                 <div 
                   className="prose prose-sm dark:prose-invert max-w-none
@@ -4610,7 +4890,7 @@ Ans: 1`}
                 <p className="text-muted-foreground">No content available</p>
               )}
             </CardContent>
-            <div className="flex justify-between gap-2 p-4 border-t">
+            <div className="flex flex-col-reverse sm:flex-row justify-between gap-2 p-3 sm:p-4 border-t">
               <ReportDialog
                 groupId={viewingContent.groupId}
                 contentId={viewingContent.id}
@@ -4623,16 +4903,18 @@ Ans: 1`}
                 {(isAdmin || viewingContent.createdBy === user?.id) && (
                   <Button 
                     variant="outline" 
+                    size="sm"
+                    className="flex-1 sm:flex-none h-9"
                     onClick={() => {
                       setEditingContent(viewingContent)
                       setEditContent(viewingContent.content || '')
                       setViewingContent(null)
                     }}
                   >
-                    <Pencil className="h-4 w-4 mr-1" /> Edit
+                    <Pencil className="h-4 w-4 sm:mr-1" /> <span className="hidden sm:inline">Edit</span>
                   </Button>
                 )}
-                <Button variant="outline" onClick={() => setViewingContent(null)}>
+                <Button variant="outline" size="sm" className="flex-1 sm:flex-none h-9" onClick={() => setViewingContent(null)}>
                   Close
                 </Button>
               </div>
@@ -4641,13 +4923,13 @@ Ans: 1`}
         </div>
       )}
 
-      {/* Delete Requests Modal */}
+      {/* Delete Requests Modal - Mobile optimized */}
       {showDeleteRequests && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <Card className="w-full max-w-lg max-h-[80vh] overflow-hidden flex flex-col">
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle className="flex items-center gap-2">
-                <AlertTriangle className="h-5 w-5 text-orange-500" />
+        <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50">
+          <Card className="w-full sm:max-w-lg h-[85vh] sm:h-auto sm:max-h-[80vh] overflow-hidden flex flex-col rounded-t-2xl sm:rounded-xl">
+            <CardHeader className="flex flex-row items-center justify-between py-3 px-4">
+              <CardTitle className="flex items-center gap-2 text-base sm:text-lg">
+                <AlertTriangle className="h-4 w-4 sm:h-5 sm:w-5 text-orange-500" />
                 Delete Requests
               </CardTitle>
               <Button variant="ghost" size="sm" onClick={() => setShowDeleteRequests(false)}>
@@ -4767,14 +5049,14 @@ Ans: 1`}
         </div>
       )}
 
-      {/* Assign Members Modal */}
+      {/* Assign Members Modal - Mobile optimized */}
       {showAssignModal && assigningTopicId && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <Card className="w-full max-w-md">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <UserPlus className="h-5 w-5" />
-                Assign Members to Chapter
+        <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50">
+          <Card className="w-full sm:max-w-md rounded-t-2xl sm:rounded-xl">
+            <CardHeader className="py-3 px-4">
+              <CardTitle className="flex items-center gap-2 text-base sm:text-lg">
+                <UserPlus className="h-4 w-4 sm:h-5 sm:w-5" />
+                Assign Members
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -4832,6 +5114,237 @@ Ans: 1`}
                   setSelectedMemberIds([])
                 }}>
                   Save
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Import from Library Modal */}
+      {showImportFromLibrary && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <Card className="w-full max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <CardTitle className="flex items-center gap-2">
+                  <Library className="h-5 w-5 text-purple-600" />
+                  Import from Library
+                </CardTitle>
+                <Button variant="ghost" size="sm" onClick={() => {
+                  setShowImportFromLibrary(false)
+                  setSelectedAssetIds([])
+                  setImportTargetTopicId(null)
+                }}>
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="flex-1 overflow-y-auto space-y-4">
+              {/* Filter by Type */}
+              <div className="flex flex-wrap gap-1 p-1 bg-muted rounded">
+                <button
+                  onClick={() => setImportAssetType('all')}
+                  className={`px-2 py-1 rounded text-xs ${importAssetType === 'all' ? 'bg-background shadow' : ''}`}
+                >
+                  All
+                </button>
+                <button
+                  onClick={() => setImportAssetType('mcq')}
+                  className={`px-2 py-1 rounded text-xs ${importAssetType === 'mcq' ? 'bg-background shadow' : ''}`}
+                >
+                  MCQs
+                </button>
+                <button
+                  onClick={() => setImportAssetType('note')}
+                  className={`px-2 py-1 rounded text-xs ${importAssetType === 'note' ? 'bg-background shadow' : ''}`}
+                >
+                  Notes
+                </button>
+                <button
+                  onClick={() => setImportAssetType('url')}
+                  className={`px-2 py-1 rounded text-xs ${importAssetType === 'url' ? 'bg-background shadow' : ''}`}
+                >
+                  Links
+                </button>
+                <button
+                  onClick={() => setImportAssetType('pdf')}
+                  className={`px-2 py-1 rounded text-xs ${importAssetType === 'pdf' ? 'bg-background shadow' : ''}`}
+                >
+                  PDFs
+                </button>
+                <button
+                  onClick={() => setImportAssetType('video')}
+                  className={`px-2 py-1 rounded text-xs ${importAssetType === 'video' ? 'bg-background shadow' : ''}`}
+                >
+                  Videos
+                </button>
+              </div>
+
+              {/* Filter by Subject/Topic */}
+              <div className="flex gap-2">
+                <Select value={assetSelectedSubject || 'all'} onValueChange={v => setAssetSelectedSubject(v === 'all' ? null : v)}>
+                  <SelectTrigger className="flex-1 h-9">
+                    <SelectValue placeholder="All Subjects" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Subjects</SelectItem>
+                    {assetSubjects.map(s => (
+                      <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                
+                {assetSelectedSubject && (
+                  <Select value={assetSelectedTopic || 'all'} onValueChange={v => setAssetSelectedTopic(v === 'all' ? null : v)}>
+                    <SelectTrigger className="flex-1 h-9">
+                      <SelectValue placeholder="All Topics" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Topics</SelectItem>
+                      {getAssetTopicsBySubject(assetSelectedSubject).map(t => (
+                        <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+
+              {/* Assets List */}
+              <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                {allAssets.length === 0 ? (
+                  <p className="text-center text-muted-foreground py-8">
+                    No assets in your library yet.
+                    <br />
+                    <span className="text-xs">Go to Library tab to add content!</span>
+                  </p>
+                ) : (
+                  allAssets
+                    .filter(a => {
+                      if (importAssetType !== 'all' && a.type !== importAssetType) return false
+                      if (assetSelectedSubject && a.subjectId !== assetSelectedSubject) return false
+                      if (assetSelectedTopic && a.topicId !== assetSelectedTopic) return false
+                      return true // Show all types: mcq, note, url, pdf, video
+                    })
+                    .map(asset => (
+                      <label
+                        key={asset.id}
+                        className={`flex items-start gap-3 p-3 border rounded-lg cursor-pointer hover:bg-muted/50 ${
+                          selectedAssetIds.includes(asset.id) ? 'border-primary bg-primary/5' : ''
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedAssetIds.includes(asset.id)}
+                          onChange={e => {
+                            if (e.target.checked) {
+                              setSelectedAssetIds([...selectedAssetIds, asset.id])
+                            } else {
+                              setSelectedAssetIds(selectedAssetIds.filter(id => id !== asset.id))
+                            }
+                          }}
+                          className="mt-1"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                              asset.type === 'mcq' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' :
+                              asset.type === 'note' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' :
+                              asset.type === 'url' ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400' :
+                              asset.type === 'pdf' ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400' :
+                              asset.type === 'video' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400' :
+                              'bg-gray-100 text-gray-700 dark:bg-gray-900/30 dark:text-gray-400'
+                            }`}>
+                              {asset.type.toUpperCase()}
+                            </span>
+                            <span className="text-xs text-muted-foreground">
+                              {assetSubjects.find(s => s.id === asset.subjectId)?.name}
+                            </span>
+                          </div>
+                          <p className="text-sm mt-1 truncate">
+                            {asset.type === 'mcq' 
+                              ? (asset as any).question?.substring(0, 80) + ((asset as any).question?.length > 80 ? '...' : '')
+                              : asset.title
+                            }
+                          </p>
+                        </div>
+                      </label>
+                    ))
+                )}
+              </div>
+
+              {/* Selected count */}
+              {selectedAssetIds.length > 0 && (
+                <p className="text-sm text-primary font-medium">
+                  ✓ {selectedAssetIds.length} item(s) selected
+                </p>
+              )}
+
+              {/* Actions */}
+              <div className="flex justify-end gap-2 pt-2 border-t">
+                <Button variant="outline" onClick={() => {
+                  setShowImportFromLibrary(false)
+                  setSelectedAssetIds([])
+                  setImportTargetTopicId(null)
+                }}>
+                  Cancel
+                </Button>
+                <Button
+                  disabled={selectedAssetIds.length === 0}
+                  onClick={async () => {
+                    if (!importTargetTopicId || !activeGroupId || !user) return
+                    
+                    for (const assetId of selectedAssetIds) {
+                      const asset = allAssets.find(a => a.id === assetId)
+                      if (!asset) continue
+                      
+                      if (asset.type === 'mcq') {
+                        // Create MCQ in group
+                        const mcq: GroupMCQ = {
+                          id: uuidv4(),
+                          groupId: activeGroupId,
+                          categoryId: questionCategories[0]?.id || '',
+                          subTopicId: importTargetTopicId,
+                          question: (asset as any).question,
+                          options: (asset as any).options,
+                          correctIndex: (asset as any).correctIndex,
+                          explanation: (asset as any).explanation,
+                          difficulty: (asset as any).difficulty,
+                          createdBy: user.id,
+                          createdByName: user.displayName,
+                          createdAt: Date.now(),
+                        }
+                        addGroupMCQ(mcq)
+                        await setDoc(doc(db, 'mcqs', mcq.id), mcq)
+                      } else if (asset.type === 'note') {
+                        // Create note content item
+                        const contentItem: GroupContentItem = {
+                          id: uuidv4(),
+                          subTopicId: importTargetTopicId,
+                          topicId: importTargetTopicId,
+                          groupId: activeGroupId,
+                          type: 'note',
+                          title: asset.title,
+                          content: (asset as any).content,
+                          source: 'library',
+                          createdBy: user.id,
+                          createdByName: user.displayName,
+                          createdAt: Date.now(),
+                          updatedAt: Date.now(),
+                        }
+                        addContentItem(contentItem)
+                        await setDoc(doc(db, 'content-items', contentItem.id), contentItem)
+                      }
+                    }
+                    
+                    alert(`✅ ${selectedAssetIds.length} item(s) imported successfully!`)
+                    setShowImportFromLibrary(false)
+                    setSelectedAssetIds([])
+                    setImportTargetTopicId(null)
+                  }}
+                >
+                  <Library className="h-4 w-4 mr-2" />
+                  Import ({selectedAssetIds.length})
                 </Button>
               </div>
             </CardContent>
