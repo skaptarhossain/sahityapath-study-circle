@@ -104,6 +104,50 @@ export function MainLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const { user, setUser } = useAuthStore()
 
+  // Android Back Button Handling
+  useEffect(() => {
+    const handlePopState = (e: PopStateEvent) => {
+      e.preventDefault()
+      
+      // Close sidebar if open
+      if (sidebarOpen) {
+        setSidebarOpen(false)
+        window.history.pushState(null, '', window.location.href)
+        return
+      }
+      
+      // Navigate back in sub-tabs first
+      if (activeTab === 'personal' && personalTab !== 'dashboard') {
+        setPersonalTab('dashboard')
+        window.history.pushState(null, '', window.location.href)
+        return
+      }
+      if (activeTab === 'group' && groupTab !== 'whats-new') {
+        setGroupTab('whats-new')
+        window.history.pushState(null, '', window.location.href)
+        return
+      }
+      if (activeTab === 'coaching' && coachingTab !== 'browse') {
+        setCoachingTab('browse')
+        window.history.pushState(null, '', window.location.href)
+        return
+      }
+      
+      // If on main tab, go to personal
+      if (activeTab !== 'personal') {
+        setActiveTab('personal')
+        window.history.pushState(null, '', window.location.href)
+        return
+      }
+    }
+    
+    // Push initial state
+    window.history.pushState(null, '', window.location.href)
+    window.addEventListener('popstate', handlePopState)
+    
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [sidebarOpen, activeTab, personalTab, groupTab, coachingTab])
+
   // Save tabs to localStorage
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY_MAIN_TAB, activeTab)
@@ -276,10 +320,7 @@ export function MainLayout() {
             {subTabsConfig.tabs.map((item) => (
               <button
                 key={item.id}
-                onClick={() => {
-                  console.log('Tab clicked:', item.id)
-                  subTabsConfig.setActive(item.id as never)
-                }}
+                onClick={() => subTabsConfig.setActive(item.id as never)}
                 className={cn(
                   'flex flex-col items-center justify-center py-1.5 px-2 rounded-lg transition-all flex-1 min-w-0',
                   subTabsConfig.active === item.id

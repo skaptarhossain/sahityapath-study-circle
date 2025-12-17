@@ -1037,33 +1037,120 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
             )}
           </TabsContent>
 
-          {/* Live Test Tab - No Course */}
+          {/* Live Test Tab - No Course Selected: Show Full UI */}
           <TabsContent value="live-test" className="mt-4 space-y-6">
             <div>
               <h1 className="text-2xl font-bold">Live Tests</h1>
               <p className="text-muted-foreground">Practice with timed tests</p>
             </div>
-            <Card className="p-12 text-center">
-              <Brain className="h-16 w-16 mx-auto text-muted-foreground/30 mb-4" />
-              <h3 className="text-lg font-semibold mb-2">Select a course first</h3>
-              <p className="text-muted-foreground mb-4">Go to Course tab and select a course</p>
-              <Button onClick={() => setActiveSubTab('course')}>
-                <BookOpen className="h-4 w-4 mr-2" /> Go to Courses
+            
+            {/* Sub-tabs for Live Test */}
+            <div className="flex gap-2 flex-wrap">
+              <Button 
+                variant={liveTestTab === 'upcoming' ? 'default' : 'outline'} 
+                size="sm"
+                onClick={() => setLiveTestTab('upcoming')}
+              >
+                <Clock className="h-4 w-4 mr-1" /> Upcoming
               </Button>
-            </Card>
+              <Button 
+                variant={liveTestTab === 'past' ? 'default' : 'outline'} 
+                size="sm"
+                onClick={() => setLiveTestTab('past')}
+              >
+                <History className="h-4 w-4 mr-1" /> Past Tests
+              </Button>
+              <Button 
+                variant={liveTestTab === 'results' ? 'default' : 'outline'} 
+                size="sm"
+                onClick={() => setLiveTestTab('results')}
+              >
+                <Trophy className="h-4 w-4 mr-1" /> My Results
+              </Button>
+            </div>
+
+            {/* Upcoming Tests */}
+            {liveTestTab === 'upcoming' && (
+              <Card className="p-8 text-center">
+                <Clock className="h-12 w-12 mx-auto text-muted-foreground/30 mb-4" />
+                <h3 className="text-lg font-semibold mb-2">No Upcoming Tests</h3>
+                <p className="text-muted-foreground">
+                  {courses.length === 0 
+                    ? "Create a course first to schedule tests" 
+                    : "Select a course to view and schedule tests"}
+                </p>
+              </Card>
+            )}
+
+            {/* Past Tests */}
+            {liveTestTab === 'past' && (
+              <Card className="p-8 text-center">
+                <History className="h-12 w-12 mx-auto text-muted-foreground/30 mb-4" />
+                <h3 className="text-lg font-semibold mb-2">No Past Tests</h3>
+                <p className="text-muted-foreground">Your completed tests will appear here</p>
+              </Card>
+            )}
+
+            {/* My Results */}
+            {liveTestTab === 'results' && (
+              <Card className="p-8 text-center">
+                <Trophy className="h-12 w-12 mx-auto text-muted-foreground/30 mb-4" />
+                <h3 className="text-lg font-semibold mb-2">No Results Yet</h3>
+                <p className="text-muted-foreground">Complete a test to see your results</p>
+              </Card>
+            )}
           </TabsContent>
 
-          {/* Settings Tab - No Course */}
+          {/* Settings Tab - No Course: Show Full UI */}
           <TabsContent value="settings" className="mt-4 space-y-6">
             <div>
               <h1 className="text-2xl font-bold">Settings</h1>
               <p className="text-muted-foreground">Manage your preferences</p>
             </div>
+            
+            {/* Info Card */}
             <Card className="p-6">
-              <h3 className="font-semibold mb-4">About Personal Desk</h3>
-              <p className="text-sm text-muted-foreground">
+              <h3 className="font-semibold mb-4 flex items-center gap-2">
+                <Settings className="h-5 w-5" /> About Personal Desk
+              </h3>
+              <p className="text-sm text-muted-foreground mb-4">
                 Personal Desk helps you create and organize your own courses, notes, and MCQs for self-study.
               </p>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
+                <div className="p-3 bg-muted rounded-lg">
+                  <p className="text-2xl font-bold text-primary">{courses.length}</p>
+                  <p className="text-xs text-muted-foreground">Courses</p>
+                </div>
+                <div className="p-3 bg-muted rounded-lg">
+                  <p className="text-2xl font-bold text-green-600">{topics.length}</p>
+                  <p className="text-xs text-muted-foreground">Topics</p>
+                </div>
+                <div className="p-3 bg-muted rounded-lg">
+                  <p className="text-2xl font-bold text-purple-600">{courseMCQs.length}</p>
+                  <p className="text-xs text-muted-foreground">MCQs</p>
+                </div>
+                <div className="p-3 bg-muted rounded-lg">
+                  <p className="text-2xl font-bold text-yellow-600">{liveTests.length}</p>
+                  <p className="text-xs text-muted-foreground">Tests</p>
+                </div>
+              </div>
+            </Card>
+
+            {/* Live Test Management - Placeholder */}
+            <Card className="p-6">
+              <h3 className="font-semibold mb-4 flex items-center gap-2">
+                <Brain className="h-5 w-5" /> Live Test Management
+              </h3>
+              <p className="text-sm text-muted-foreground mb-4">
+                {courses.length === 0 
+                  ? "Create a course first to manage live tests and auto-scheduling."
+                  : "Select a course to manage live tests and enable auto-scheduling."}
+              </p>
+              {courses.length === 0 && (
+                <Button onClick={() => { setActiveSubTab('course'); setShowCreateCourse(true); }}>
+                  <Plus className="h-4 w-4 mr-2" /> Create Course
+                </Button>
+              )}
             </Card>
           </TabsContent>
         </Tabs>

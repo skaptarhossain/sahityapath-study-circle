@@ -142,3 +142,57 @@
 .prose [style*="text-align: justify"] {
   text-align: justify !important;
 }
+
+/* Material Design Ripple Effect */
+.ripple {
+  position: relative;
+  overflow: hidden;
+}
+
+.ripple::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.2;
+  transform: translate(-50%, -50%);
+  transition: width 0.3s ease, height 0.3s ease, opacity 0.3s ease;
+}
+
+.ripple:active::after {
+  width: 200%;
+  height: 200%;
+  opacity: 0;
+}
+
+/* Touch Target Size - Minimum 44x44px for mobile */
+@media (max-width: 640px) {
+  button, 
+  [role="button"],
+  a,
+  input[type="checkbox"],
+  input[type="radio"] {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  
+  /* Exception for inline text buttons */
+  .inline-btn {
+    min-height: auto;
+    min-width: auto;
+  }
+}
+
+/* Android-style active state */
+@media (hover: none) {
+  button:active,
+  [role="button"]:active {
+    transform: scale(0.98);
+    opacity: 0.9;
+  }
+}
+

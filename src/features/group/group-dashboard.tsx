@@ -353,7 +353,6 @@ export function GroupDashboard({ activeSubTab, setActiveSubTab }: GroupDashboard
 
   // Sync group data from Firestore when group is selected
   const syncGroupFromCloud = async (groupId: string) => {
-    console.log('Syncing from cloud for group:', groupId)
     try {
       // Sync group info
       const groupRef = doc(db, 'groups', groupId)
@@ -361,7 +360,6 @@ export function GroupDashboard({ activeSubTab, setActiveSubTab }: GroupDashboard
       if (groupSnap.exists()) {
         const cloudGroup = groupSnap.data() as Group
         updateGroup(cloudGroup)
-        console.log('Group synced:', cloudGroup.name)
       }
       
       // Get current state to check for duplicates
@@ -373,7 +371,6 @@ export function GroupDashboard({ activeSubTab, setActiveSubTab }: GroupDashboard
       // Sync topics (only add if not exists, otherwise update)
       const topicsQuery = query(collection(db, 'topics'), where('groupId', '==', groupId))
       const topicsSnap = await getDocs(topicsQuery)
-      console.log('Topics found:', topicsSnap.size)
       topicsSnap.forEach(docSnap => {
         const cloudTopic = docSnap.data() as GroupTopic
         const exists = currentTopics.find(t => t.id === cloudTopic.id)
@@ -387,10 +384,8 @@ export function GroupDashboard({ activeSubTab, setActiveSubTab }: GroupDashboard
       // Sync content items (only add if not exists, otherwise update)
       const contentQuery = query(collection(db, 'contentItems'), where('groupId', '==', groupId))
       const contentSnap = await getDocs(contentQuery)
-      console.log('Content items found:', contentSnap.size)
       contentSnap.forEach(docSnap => {
         const cloudItem = docSnap.data() as GroupContentItem
-        console.log('Cloud item:', cloudItem.title, '| Content length:', cloudItem.content?.length || 0, '| Content preview:', cloudItem.content?.substring(0, 100))
         const exists = currentContentItems.find(ci => ci.id === cloudItem.id)
         if (exists) {
           updateContentItem(cloudItem)
@@ -402,7 +397,6 @@ export function GroupDashboard({ activeSubTab, setActiveSubTab }: GroupDashboard
       // Sync MCQs (only add if not exists - no update function available)
       const mcqQuery = query(collection(db, 'mcqs'), where('groupId', '==', groupId))
       const mcqSnap = await getDocs(mcqQuery)
-      console.log('MCQs found:', mcqSnap.size)
       mcqSnap.forEach(docSnap => {
         const cloudMCQ = docSnap.data() as GroupMCQ
         const exists = currentMCQs.find(m => m.id === cloudMCQ.id)
@@ -414,7 +408,6 @@ export function GroupDashboard({ activeSubTab, setActiveSubTab }: GroupDashboard
       // Sync categories (only add if not exists - no update function available)
       const catQuery = query(collection(db, 'categories'), where('groupId', '==', groupId))
       const catSnap = await getDocs(catQuery)
-      console.log('Categories found:', catSnap.size)
       catSnap.forEach(docSnap => {
         const cloudCat = docSnap.data() as GroupQuestionCategory
         const exists = currentCategories.find(c => c.id === cloudCat.id)
@@ -423,7 +416,6 @@ export function GroupDashboard({ activeSubTab, setActiveSubTab }: GroupDashboard
         }
       })
       
-      console.log('Sync complete!')
     } catch (err) {
       console.error('Error syncing from Firestore:', err)
     }
@@ -494,7 +486,6 @@ export function GroupDashboard({ activeSubTab, setActiveSubTab }: GroupDashboard
         
         if (groups.length > 0) {
           setMyGroups(groups)
-          console.log('Loaded', groups.length, 'groups from Firebase')
         }
       } catch (err) {
         console.error('Error loading groups from Firebase:', err)
@@ -1241,7 +1232,6 @@ export function GroupDashboard({ activeSubTab, setActiveSubTab }: GroupDashboard
     // Save to Firestore
     try {
       await setDoc(doc(db, 'contentItems', item.id), item)
-      console.log('Content saved successfully:', item.title, '| Content length:', item.content?.length)
     } catch (err) {
       console.error('Error saving content to Firestore:', err)
       alert('❌ Content save করতে সমস্যা হয়েছে! কনসোল চেক করুন।')
@@ -4352,7 +4342,6 @@ Diff: medium (optional)`}
                 // Also save to Firestore
                 try {
                   await setDoc(doc(db, 'contentItems', updated.id), updated)
-                  console.log('Content updated in Firestore:', updated.title)
                 } catch (err) {
                   console.error('Error updating content in Firestore:', err)
                   alert('❌ Firestore এ update করতে সমস্যা হয়েছে!')

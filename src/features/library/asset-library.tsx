@@ -642,9 +642,6 @@ export function AssetLibrary() {
       
       // Sync to all desks that have this MCQ
       const syncResult = syncAllDesksFromLibrary(editingMCQ.assetId, editingMCQ.questionId)
-      if (syncResult.total > 0) {
-        console.log(`✅ Synced to ${syncResult.total} desk(s): Personal=${syncResult.personal}, Group=${syncResult.group}, Coaching=${syncResult.coaching}`)
-      }
       
       setShowEditDialog(false)
       setEditingMCQ(null)
@@ -744,12 +741,10 @@ export function AssetLibrary() {
       
       // Get MCQs for this specific pack
       const packMcqs = getMcqsByPack(selectedPackId)
-      console.log('Pack MCQs:', packMcqs.length, 'Selected:', selectedMcqIds.length)
       
       // Import selected MCQs - each MCQ becomes a separate asset with quizQuestions array
       for (const mcqId of selectedMcqIds) {
         const libMcq = packMcqs.find(m => m.id === mcqId)
-        console.log('Looking for MCQ:', mcqId, 'Found:', !!libMcq)
         if (libMcq) {
           const newMcq: AssetMCQ = {
             id: uuidv4(),
@@ -778,12 +773,10 @@ export function AssetLibrary() {
       
       // Get Notes for this specific pack
       const packNotes = getNotesByPack(selectedPackId)
-      console.log('Pack Notes:', packNotes.length, 'Selected:', selectedNoteIds.length)
       
       // Import selected Notes
       for (const noteId of selectedNoteIds) {
         const libNote = packNotes.find(n => n.id === noteId)
-        console.log('Looking for Note:', noteId, 'Found:', !!libNote)
         if (libNote) {
           const newNote: AssetNote = {
             id: uuidv4(),
@@ -804,11 +797,8 @@ export function AssetLibrary() {
       }
       
       // Bulk create assets
-      console.log('Assets to create:', assetsToCreate.length)
       if (assetsToCreate.length > 0) {
-        console.log('Creating assets in bulk...')
         await createAssetsInBulk(assetsToCreate)
-        console.log('Bulk create done!')
         // Firebase subscription will update store automatically
         
         alert(`✅ ${assetsToCreate.length}টি আইটেম সফলভাবে Import হয়েছে!`)
