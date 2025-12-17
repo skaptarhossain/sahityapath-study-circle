@@ -514,7 +514,11 @@ export const usePersonalStore = create<PersonalState>()(
           const liveTestResultsSnap = await getDocs(query(collection(db, 'personal-live-test-results'), where('userId', '==', userId)))
           const liveTestResults = liveTestResultsSnap.docs.map(d => ({ ...d.data() } as PersonalLiveTestResult))
           
-          set({ courses, topics, contentItems, courseMCQs, questionCategories, quizResults, liveTests, liveTestResults })
+          // Load auto live test configs
+          const autoConfigsSnap = await getDocs(query(collection(db, 'personal-auto-test-configs'), where('userId', '==', userId)))
+          const autoLiveTestConfigs = autoConfigsSnap.docs.map(d => ({ ...d.data() } as PersonalAutoLiveTestConfig))
+          
+          set({ courses, topics, contentItems, courseMCQs, questionCategories, quizResults, liveTests, liveTestResults, autoLiveTestConfigs })
           console.log('✅ Personal data loaded from Firebase')
         } catch (error) {
           console.error('Error loading personal data:', error)
@@ -585,6 +589,14 @@ export const usePersonalStore = create<PersonalState>()(
           onSnapshot(query(collection(db, 'personal-live-test-results'), where('userId', '==', userId)), (snap) => {
             const liveTestResults = snap.docs.map(d => ({ ...d.data() } as PersonalLiveTestResult))
             set({ liveTestResults })
+          })
+        )
+        
+        // Subscribe to auto test configs
+        unsubscribers.push(
+          onSnapshot(query(collection(db, 'personal-auto-test-configs'), where('userId', '==', userId)), (snap) => {
+            const autoLiveTestConfigs = snap.docs.map(d => ({ ...d.data() } as PersonalAutoLiveTestConfig))
+            set({ autoLiveTestConfigs })
           })
         )
         

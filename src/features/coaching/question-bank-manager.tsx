@@ -26,6 +26,7 @@ import { useCoachingStore } from '@/stores/coaching-store'
 import { useLibraryStore } from '@/stores/library-store'
 import { useAssetStore } from '@/stores/asset-store'
 import { useAuthStore } from '@/stores/auth-store'
+import { syncCoachingToLibrary } from '@/lib/asset-sync'
 import { db } from '@/config/firebase'
 import { collection, doc, getDocs, query, setDoc, where } from 'firebase/firestore'
 import * as XLSX from 'xlsx'
@@ -579,6 +580,10 @@ export function QuestionBankManager({ courseId }: QuestionBankManagerProps) {
     updateMCQ(updated)
     try {
       await setDoc(doc(db, 'coaching-mcqs', updated.id), updated)
+      // Sync to Asset Library if linked
+      if ((updated as any).assetRef) {
+        syncCoachingToLibrary(updated.id)
+      }
     } catch (err) {
       console.error('Error updating MCQ:', err)
     }

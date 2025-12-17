@@ -63,6 +63,7 @@ interface GroupState {
   
   // Actions - MCQs
   addGroupMCQ: (mcq: GroupMCQ) => void
+  updateGroupMCQ: (mcq: GroupMCQ) => void
   removeGroupMCQ: (mcqId: string) => void
   
   // Actions - Question Categories
@@ -336,6 +337,15 @@ export const useGroupStore = create<GroupState>()(
         try {
           await setDoc(doc(db, 'group-mcqs', mcq.id), mcq)
         } catch (e) { console.error('Error saving MCQ:', e) }
+      },
+      
+      updateGroupMCQ: async (mcq) => {
+        set(state => ({
+          groupMCQs: state.groupMCQs.map(m => m.id === mcq.id ? mcq : m)
+        }))
+        try {
+          await setDoc(doc(db, 'group-mcqs', mcq.id), mcq)
+        } catch (e) { console.error('Error updating MCQ:', e) }
       },
       
       removeGroupMCQ: async (mcqId) => {
@@ -661,6 +671,10 @@ export const useGroupStore = create<GroupState>()(
           const reportsSnap = await getDocs(query(collection(db, 'group-reports'), where('groupId', '==', groupId)))
           const contentReports = reportsSnap.docs.map(d => ({ ...d.data() } as ContentReport))
           
+          // Load auto live test configs
+          const autoConfigSnap = await getDocs(query(collection(db, 'group-auto-test-configs'), where('groupId', '==', groupId)))
+          const autoLiveTestConfigs = autoConfigSnap.docs.map(d => ({ ...d.data() } as AutoLiveTestConfig))
+          
           // Merge with existing (for other groups)
           set(state => ({
             topics: [...state.topics.filter(t => t.groupId !== groupId), ...topics],
@@ -673,6 +687,7 @@ export const useGroupStore = create<GroupState>()(
             liveTestResults: [...state.liveTestResults.filter(r => r.groupId !== groupId), ...liveTestResults],
             deleteRequests: [...state.deleteRequests.filter(r => r.groupId !== groupId), ...deleteRequests],
             contentReports: [...state.contentReports.filter(r => r.groupId !== groupId), ...contentReports],
+            autoLiveTestConfigs: [...state.autoLiveTestConfigs.filter(c => c.groupId !== groupId), ...autoLiveTestConfigs],
           }))
           
           console.log('✅ Group data loaded from Firebase:', groupId)
@@ -773,6 +788,16 @@ export const useGroupStore = create<GroupState>()(
             const liveTestResults = snap.docs.map(d => ({ ...d.data() } as LiveTestResult))
             set(state => ({
               liveTestResults: [...state.liveTestResults.filter(r => r.groupId !== groupId), ...liveTestResults]
+            }))
+          })
+        )
+        
+        // Subscribe to auto live test configs
+        unsubscribers.push(
+          onSnapshot(query(collection(db, 'group-auto-test-configs'), where('groupId', '==', groupId)), (snap) => {
+            const autoLiveTestConfigs = snap.docs.map(d => ({ ...d.data() } as AutoLiveTestConfig))
+            set(state => ({
+              autoLiveTestConfigs: [...state.autoLiveTestConfigs.filter(c => c.groupId !== groupId), ...autoLiveTestConfigs]
             }))
           })
         )

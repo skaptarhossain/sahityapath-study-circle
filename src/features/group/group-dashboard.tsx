@@ -77,6 +77,7 @@ import 'react-quill/dist/quill.snow.css'
 import type { Group, GroupTopic, GroupSubTopic, GroupContentItem, GroupMCQ, DeleteRequest, GroupQuestionCategory, GroupQuizResult, LiveTest, LiveTestResult, LibraryContentPack } from '@/types'
 import { GroupQuizRunner } from './group-quiz-runner'
 import { ReportDialog } from './report-dialog'
+import { syncGroupToLibrary } from '@/lib/asset-sync'
 import type { GroupSubTab } from '@/components/layout/main-layout'
 
 interface GroupDashboardProps {
@@ -110,6 +111,7 @@ export function GroupDashboard({ activeSubTab, setActiveSubTab }: GroupDashboard
     updateContentItem,
     removeContentItem,
     addGroupMCQ,
+    updateGroupMCQ,
     removeGroupMCQ,
     addQuestionCategory,
     removeQuestionCategory,
@@ -193,6 +195,13 @@ export function GroupDashboard({ activeSubTab, setActiveSubTab }: GroupDashboard
   const [mcqOptions, setMcqOptions] = useState(['', '', '', ''])
   const [mcqCorrect, setMcqCorrect] = useState(0)
   const [addingMCQTo, setAddingMCQTo] = useState<string | null>(null)
+  
+  // MCQ Edit state
+  const [editingMcq, setEditingMcq] = useState<GroupMCQ | null>(null)
+  const [editMcqQuestion, setEditMcqQuestion] = useState('')
+  const [editMcqOptions, setEditMcqOptions] = useState(['', '', '', ''])
+  const [editMcqCorrectIndex, setEditMcqCorrectIndex] = useState(0)
+  const [editMcqExplanation, setEditMcqExplanation] = useState('')
   
   // Live Test Tab state
   const [liveTestTab, setLiveTestTab] = useState<'upcoming' | 'active' | 'past' | 'results'>('upcoming')
@@ -1295,6 +1304,36 @@ export function GroupDashboard({ activeSubTab, setActiveSubTab }: GroupDashboard
     setMcqOptions(['', '', '', ''])
     setMcqCorrect(0)
     setAddingMCQTo(null)
+  }
+
+  // MCQ Edit handlers
+  const handleEditMcq = (mcq: GroupMCQ) => {
+    setEditingMcq(mcq)
+    setEditMcqQuestion(mcq.question)
+    setEditMcqOptions([...mcq.options])
+    setEditMcqCorrectIndex(mcq.correctIndex)
+    setEditMcqExplanation(mcq.explanation || '')
+  }
+
+  const handleSaveEditMcq = async () => {
+    if (!editingMcq || !editMcqQuestion.trim() || editMcqOptions.some(o => !o.trim())) return
+    
+    const updated: GroupMCQ = {
+      ...editingMcq,
+      question: editMcqQuestion.trim(),
+      options: editMcqOptions.map(o => o.trim()),
+      correctIndex: editMcqCorrectIndex,
+      explanation: editMcqExplanation.trim() || undefined,
+    }
+    
+    updateGroupMCQ(updated)
+    
+    // Sync to Asset Library if linked
+    if ((updated as any).assetRef) {
+      syncGroupToLibrary(updated.id)
+    }
+    
+    setEditingMcq(null)
   }
 
   const copyGroupCode = () => {
@@ -4077,7 +4116,10 @@ Diff: medium (optional)`}
                                       <div key={q.id} className="p-2.5 hover:bg-muted/30">
                                         <div className="flex items-start justify-between gap-2">
                                           <div className="flex-1 min-w-0">
-                                            <p className="text-xs font-medium truncate">{idx + 1}. {q.question}</p>
+                                            <p className="text-xs font-medium truncate">
+                                              {idx + 1}. {q.question}
+                                              {(q as any).assetRef && <span className="ml-1 text-green-500" title="Synced with Library">🔗</span>}
+                                            </p>
                                             <div className="mt-1 grid grid-cols-2 gap-0.5 text-[10px] text-muted-foreground">
                                               {q.options.map((opt, i) => (
                                                 <span key={i} className={`truncate ${i === q.correctIndex ? 'text-green-600 font-medium' : ''}`}>
@@ -4086,16 +4128,26 @@ Diff: medium (optional)`}
                                               ))}
                                             </div>
                                           </div>
-                                          <button 
-                                            onClick={() => {
-                                              if (confirm('Delete this question?')) {
-                                                removeGroupMCQ(q.id)
-                                              }
-                                            }} 
-                                            className="text-red-500 hover:text-red-700 flex-shrink-0"
-                                          >
-                                            <Trash2 className="h-3.5 w-3.5" />
-                                          </button>
+                                          <div className="flex gap-1 flex-shrink-0">
+                                            <button 
+                                              onClick={() => handleEditMcq(q)} 
+                                              className="text-blue-500 hover:text-blue-700"
+                                              title="Edit MCQ"
+                                            >
+                                              <Pencil className="h-3.5 w-3.5" />
+                                            </button>
+                                            <button 
+                                              onClick={() => {
+                                                if (confirm('Delete this question?')) {
+                                                  removeGroupMCQ(q.id)
+                                                }
+                                              }} 
+                                              className="text-red-500 hover:text-red-700"
+                                              title="Delete MCQ"
+                                            >
+                                              <Trash2 className="h-3.5 w-3.5" />
+                                            </button>
+                                          </div>
                                         </div>
                                       </div>
                                     ))
@@ -5350,6 +5402,91 @@ Diff: medium (optional)`}
             </CardContent>
           </Card>
         </div>
+      )}
+
+      {/* MCQ Edit Dialog */}
+      {editingMcq && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setEditingMcq(null)}
+        >
+          <motion.div
+            initial={{ scale: 0.95, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={{ scale: 0.95, opacity: 0 }}
+            className="bg-background rounded-lg shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-4"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold flex items-center gap-2">
+                <Pencil className="h-4 w-4" /> Edit MCQ
+                {(editingMcq as any).assetRef && <span className="text-xs text-green-500">(🔗 Library Synced)</span>}
+              </h3>
+              <Button variant="ghost" size="sm" onClick={() => setEditingMcq(null)}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm font-medium mb-1 block">Question</label>
+                <Textarea
+                  value={editMcqQuestion}
+                  onChange={(e) => setEditMcqQuestion(e.target.value)}
+                  placeholder="Enter question..."
+                  rows={3}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Options</label>
+                {editMcqOptions.map((opt, idx) => (
+                  <div key={idx} className="flex items-center gap-2">
+                    <input
+                      type="radio"
+                      name="editCorrect"
+                      checked={editMcqCorrectIndex === idx}
+                      onChange={() => setEditMcqCorrectIndex(idx)}
+                      className="h-4 w-4"
+                    />
+                    <Input
+                      value={opt}
+                      onChange={(e) => {
+                        const newOpts = [...editMcqOptions]
+                        newOpts[idx] = e.target.value
+                        setEditMcqOptions(newOpts)
+                      }}
+                      placeholder={`Option ${idx + 1}`}
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <div>
+                <label className="text-sm font-medium mb-1 block">Explanation (Optional)</label>
+                <Textarea
+                  value={editMcqExplanation}
+                  onChange={(e) => setEditMcqExplanation(e.target.value)}
+                  placeholder="Explain the correct answer..."
+                  rows={2}
+                />
+              </div>
+
+              <div className="flex gap-2 justify-end pt-4 border-t">
+                <Button variant="outline" onClick={() => setEditingMcq(null)}>Cancel</Button>
+                <Button 
+                  onClick={handleSaveEditMcq}
+                  disabled={!editMcqQuestion.trim() || editMcqOptions.some(o => !o.trim())}
+                >
+                  <RefreshCw className="h-4 w-4 mr-1" /> Save {(editingMcq as any).assetRef && '& Sync'}
+                </Button>
+              </div>
+            </div>
+          </motion.div>
+        </motion.div>
       )}
     </div>
   )

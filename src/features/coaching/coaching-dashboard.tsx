@@ -395,18 +395,7 @@ export function CoachingDashboard({ activeSubTab, setActiveSubTab }: CoachingDas
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
         {(activeSubTab === 'my-courses' || activeSubTab === 'settings') && (
           <motion.div variants={staggerContainer} initial="hidden" animate="visible" className="space-y-6">
-            {!hasTeacherProfile ? (
-              <motion.div variants={fadeIn} className="bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-900/20 dark:to-orange-900/20 rounded-2xl p-6 border border-amber-200 dark:border-amber-800">
-                <div className="flex items-start gap-4">
-                  <div className="p-3 bg-amber-100 dark:bg-amber-900/50 rounded-xl"><Award className="w-8 h-8 text-amber-600" /></div>
-                  <div className="flex-1">
-                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">Complete Your Teacher Profile</h3>
-                    <p className="text-gray-600 dark:text-gray-400 mb-4">Set up your teacher profile to start creating courses.</p>
-                    <Button onClick={() => setShowProfileForm(true)}><Plus className="w-4 h-4 mr-2" />Complete Profile</Button>
-                  </div>
-                </div>
-              </motion.div>
-            ) : (
+            {hasTeacherProfile && (
               <>
                 {/* Stats Grid - 2x2 on mobile, 4 columns on desktop */}
                 <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
@@ -415,16 +404,31 @@ export function CoachingDashboard({ activeSubTab, setActiveSubTab }: CoachingDas
                   <StatsCard icon={DollarSign} label="Revenue" value={`৳${teacherStats.totalRevenue.toLocaleString()}`} trend="+8%" color="amber" />
                   <StatsCard icon={Star} label="Rating" value={teacherStats.avgRating} color="rose" />
                 </div>
-                
-                {/* Teacher Tabs - Hidden on mobile */}
-                <Tabs value={activeSubTab === 'settings' ? 'settings' : 'courses'} onValueChange={(v) => setActiveSubTab(v === 'settings' ? 'settings' : 'my-courses')} className="w-full">
-                  <TabsList className="hidden lg:grid w-full grid-cols-2 mb-6">
-                    <TabsTrigger value="courses"><BookOpen className="h-4 w-4 mr-2" /> My Courses</TabsTrigger>
-                    <TabsTrigger value="settings"><Settings className="h-4 w-4 mr-2" /> Settings</TabsTrigger>
-                  </TabsList>
-                  
-                  {/* Courses Tab */}
-                  <TabsContent value="courses" className="space-y-4 sm:space-y-6">
+              </>
+            )}
+            
+            {/* Teacher Tabs - TabsList hidden on mobile (controlled by bottom nav) */}
+            <Tabs value={activeSubTab === 'settings' ? 'settings' : 'courses'} onValueChange={(v) => setActiveSubTab(v === 'settings' ? 'settings' : 'my-courses')} className="w-full">
+              <TabsList className="hidden lg:grid w-full grid-cols-2 mb-6">
+                <TabsTrigger value="courses"><BookOpen className="h-4 w-4 mr-2" /> My Courses</TabsTrigger>
+                <TabsTrigger value="settings"><Settings className="h-4 w-4 mr-2" /> Settings</TabsTrigger>
+              </TabsList>
+              
+              {/* Courses Tab */}
+              <TabsContent value="courses" className="space-y-4 sm:space-y-6">
+                {!hasTeacherProfile ? (
+                  <motion.div variants={fadeIn} className="bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-900/20 dark:to-orange-900/20 rounded-2xl p-6 border border-amber-200 dark:border-amber-800">
+                    <div className="flex items-start gap-4">
+                      <div className="p-3 bg-amber-100 dark:bg-amber-900/50 rounded-xl"><Award className="w-8 h-8 text-amber-600" /></div>
+                      <div className="flex-1">
+                        <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">Complete Your Teacher Profile</h3>
+                        <p className="text-gray-600 dark:text-gray-400 mb-4">Set up your teacher profile to start creating courses.</p>
+                        <Button onClick={() => setShowProfileForm(true)}><Plus className="w-4 h-4 mr-2" />Complete Profile</Button>
+                      </div>
+                    </div>
+                  </motion.div>
+                ) : (
+                  <>
                     {/* Action Buttons - Scrollable on mobile */}
                     <div className="flex gap-2 overflow-x-auto pb-2 -mx-4 px-4 sm:mx-0 sm:px-0 sm:flex-wrap sm:overflow-visible scrollbar-hide">
                       <Button size="sm" className="shrink-0" onClick={() => setShowCourseForm(true)}>
@@ -473,10 +477,25 @@ export function CoachingDashboard({ activeSubTab, setActiveSubTab }: CoachingDas
                         </div>
                       )}
                     </div>
-                  </TabsContent>
-                  
-                  {/* Settings Tab */}
-                  <TabsContent value="settings" className="space-y-6">
+                  </>
+                )}
+              </TabsContent>
+              
+              {/* Settings Tab */}
+              <TabsContent value="settings" className="space-y-6">
+                {!hasTeacherProfile ? (
+                  <motion.div variants={fadeIn} className="bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-900/20 dark:to-orange-900/20 rounded-2xl p-6 border border-amber-200 dark:border-amber-800">
+                    <div className="flex items-start gap-4">
+                      <div className="p-3 bg-amber-100 dark:bg-amber-900/50 rounded-xl"><Award className="w-8 h-8 text-amber-600" /></div>
+                      <div className="flex-1">
+                        <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">Complete Your Teacher Profile</h3>
+                        <p className="text-gray-600 dark:text-gray-400 mb-4">Set up your teacher profile to access settings and manage your courses.</p>
+                        <Button onClick={() => setShowProfileForm(true)}><Plus className="w-4 h-4 mr-2" />Complete Profile</Button>
+                      </div>
+                    </div>
+                  </motion.div>
+                ) : (
+                  <>
                     {/* Page Title */}
                     <div className="flex items-center gap-2">
                       <Settings className="h-5 w-5 text-primary" />
@@ -517,10 +536,10 @@ export function CoachingDashboard({ activeSubTab, setActiveSubTab }: CoachingDas
                         <QuestionBankManager />
                       </CardContent>
                     </Card>
-                  </TabsContent>
-                </Tabs>
-              </>
-            )}
+                  </>
+                )}
+              </TabsContent>
+            </Tabs>
           </motion.div>
         )}
 

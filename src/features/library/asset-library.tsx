@@ -27,19 +27,23 @@ import {
   Package,
   CheckCircle,
   Star,
+  MoreVertical,
+  Pencil,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useAuthStore } from '@/stores/auth-store'
 import { useAssetStore } from '@/stores/asset-store'
 import { useGroupStore } from '@/stores/group-store'
 import { useCoachingStore } from '@/stores/coaching-store'
 import { useLibraryStore } from '@/stores/library-store'
+import { syncAllDesksFromLibrary } from '@/lib/asset-sync'
 import { 
   subscribeToAllAssetData,
   createAssetSubject,
@@ -50,6 +54,7 @@ import {
   deleteAsset,
   createAssetsInBulk,
   deleteAssetSubject,
+  updateAssetSubject,
   deleteAssetTopic,
   deleteAssetSubtopic,
   addAssetUsage,
@@ -129,6 +134,10 @@ export function AssetLibrary() {
     getAssetUsageCount,
     setInitialized,
     isInitialized,
+    updateSingleMCQ,
+    getMCQQuestionById,
+    updateSubject,
+    removeSubject,
   } = useAssetStore()
   
   // Group and Coaching stores for "Add to Desk"
@@ -152,6 +161,12 @@ export function AssetLibrary() {
   const [newSubtopicName, setNewSubtopicName] = useState('')
   const [expandedSubjects, setExpandedSubjects] = useState<string[]>([])
   const [expandedTopics, setExpandedTopics] = useState<string[]>([])
+  
+  // Subject Edit/Delete
+  const [editingSubject, setEditingSubject] = useState<AssetSubject | null>(null)
+  const [editSubjectName, setEditSubjectName] = useState('')
+  const [showDeleteSubjectDialog, setShowDeleteSubjectDialog] = useState(false)
+  const [subjectToDelete, setSubjectToDelete] = useState<AssetSubject | null>(null)
   
   // MCQ Form
   const [mcqQuestion, setMcqQuestion] = useState('')
@@ -186,6 +201,15 @@ export function AssetLibrary() {
   const [deskType, setDeskType] = useState<'personal' | 'group' | 'teacher'>('personal')
   const [selectedGroupId, setSelectedGroupId] = useState('')
   const [selectedCourseId, setSelectedCourseId] = useState('')
+  
+  // Edit MCQ Dialog
+  const [showEditDialog, setShowEditDialog] = useState(false)
+  const [editingMCQ, setEditingMCQ] = useState<{ assetId: string; questionId: string } | null>(null)
+  const [editMcqQuestion, setEditMcqQuestion] = useState('')
+  const [editMcqOptions, setEditMcqOptions] = useState(['', '', '', ''])
+  const [editMcqCorrectIndex, setEditMcqCorrectIndex] = useState(0)
+  const [editMcqExplanation, setEditMcqExplanation] = useState('')
+  const [editMcqDifficulty, setEditMcqDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium')
   
   // Online Library Import
   const [showImportDialog, setShowImportDialog] = useState(false)
@@ -277,11 +301,50 @@ export function AssetLibrary() {
     
     try {
       await createAssetSubject(subject)
-      addSubject(subject)
+      // Note: Don't manually add to store - Firebase subscription will update it
       setNewSubjectName('')
       setShowSubjectForm(false)
     } catch (err) {
       console.error('Error creating subject:', err)
+    }
+  }
+
+  // Edit Subject
+  const handleEditSubject = async () => {
+    if (!editingSubject || !editSubjectName.trim()) return
+    
+    try {
+      await updateAssetSubject(editingSubject.id, { name: editSubjectName.trim() })
+      updateSubject(editingSubject.id, { name: editSubjectName.trim() })
+      setEditingSubject(null)
+      setEditSubjectName('')
+    } catch (err) {
+      console.error('Error updating subject:', err)
+      alert('Subject update করতে সমস্যা হয়েছে')
+    }
+  }
+
+  // Delete Subject
+  const handleDeleteSubject = async () => {
+    if (!subjectToDelete) return
+    
+    // Check if there are assets in this subject
+    const subjectAssets = assets.filter(a => a.subjectId === subjectToDelete.id)
+    if (subjectAssets.length > 0) {
+      alert(`এই Subject এ ${subjectAssets.length}টি asset আছে। প্রথমে সেগুলো মুছুন বা সরান।`)
+      setShowDeleteSubjectDialog(false)
+      setSubjectToDelete(null)
+      return
+    }
+    
+    try {
+      await deleteAssetSubject(subjectToDelete.id)
+      removeSubject(subjectToDelete.id)
+      setShowDeleteSubjectDialog(false)
+      setSubjectToDelete(null)
+    } catch (err) {
+      console.error('Error deleting subject:', err)
+      alert('Subject delete করতে সমস্যা হয়েছে')
     }
   }
 
@@ -300,7 +363,7 @@ export function AssetLibrary() {
     
     try {
       await createAssetTopic(topic)
-      addTopic(topic)
+      // Firebase subscription will update store
       setNewTopicName('')
       setShowTopicForm(false)
     } catch (err) {
@@ -323,7 +386,7 @@ export function AssetLibrary() {
     
     try {
       await createAssetSubtopic(subtopic)
-      addSubtopic(subtopic)
+      // Firebase subscription will update store
       setNewSubtopicName('')
       setShowSubtopicForm(false)
     } catch (err) {
@@ -526,6 +589,72 @@ export function AssetLibrary() {
     }
   }
 
+  // Edit MCQ
+  const handleEditMCQ = (asset: AnyAsset) => {
+    if (asset.type !== 'mcq') return
+    const mcqAsset = asset as AssetMCQ
+    const question = mcqAsset.quizQuestions?.[0]
+    if (!question) return
+    
+    setEditingMCQ({ assetId: asset.id, questionId: question.id })
+    setEditMcqQuestion(question.question)
+    setEditMcqOptions([...question.options])
+    setEditMcqCorrectIndex(question.correctIndex)
+    setEditMcqExplanation(question.explanation || '')
+    setEditMcqDifficulty(question.difficulty || 'medium')
+    setShowEditDialog(true)
+  }
+
+  const handleSaveEditMCQ = async () => {
+    if (!editingMCQ || !editMcqQuestion.trim() || editMcqOptions.some(o => !o.trim())) return
+    
+    try {
+      setIsLoading(true)
+      
+      // Update in store
+      updateSingleMCQ(editingMCQ.assetId, editingMCQ.questionId, {
+        question: editMcqQuestion.trim(),
+        options: editMcqOptions.map(o => o.trim()),
+        correctIndex: editMcqCorrectIndex,
+        explanation: editMcqExplanation.trim() || undefined,
+        difficulty: editMcqDifficulty,
+      })
+      
+      // Update in Firebase
+      const updatedAsset = assets.find(a => a.id === editingMCQ.assetId)
+      if (updatedAsset) {
+        await updateAsset(editingMCQ.assetId, {
+          updatedAt: Date.now(),
+          quizQuestions: (updatedAsset as AssetMCQ).quizQuestions.map(q => 
+            q.id === editingMCQ.questionId 
+              ? {
+                  ...q,
+                  question: editMcqQuestion.trim(),
+                  options: editMcqOptions.map(o => o.trim()),
+                  correctIndex: editMcqCorrectIndex,
+                  explanation: editMcqExplanation.trim() || undefined,
+                  difficulty: editMcqDifficulty,
+                }
+              : q
+          )
+        })
+      }
+      
+      // Sync to all desks that have this MCQ
+      const syncResult = syncAllDesksFromLibrary(editingMCQ.assetId, editingMCQ.questionId)
+      if (syncResult.total > 0) {
+        console.log(`✅ Synced to ${syncResult.total} desk(s): Personal=${syncResult.personal}, Group=${syncResult.group}, Coaching=${syncResult.coaching}`)
+      }
+      
+      setShowEditDialog(false)
+      setEditingMCQ(null)
+    } catch (err) {
+      console.error('Error updating MCQ:', err)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
   // Add to Desk
   const handleAddToDesk = async () => {
     if (!selectedAsset) return
@@ -579,15 +708,33 @@ export function AssetLibrary() {
       return
     }
     
-    // Check if subject/topic selected for import
-    if (!formSubjectId) {
-      alert('একটি Subject select করুন!')
-      return
-    }
-    
     setImportingItems(true)
     
     try {
+      // If no subject selected but subjects exist, show alert
+      // If no subjects exist at all, create a default one
+      let targetSubjectId = formSubjectId
+      
+      if (!targetSubjectId) {
+        if (subjects.length > 0) {
+          alert('একটি Subject select করুন!')
+          setImportingItems(false)
+          return
+        } else {
+          // Auto-create default subject if none exist
+          const defaultSubject: AssetSubject = {
+            id: uuidv4(),
+            userId: user.id,
+            name: 'Imported Content',
+            order: 0,
+            createdAt: Date.now()
+          }
+          await createAssetSubject(defaultSubject)
+          addSubject(defaultSubject)
+          targetSubjectId = defaultSubject.id
+        }
+      }
+      
       const assetsToCreate: AnyAsset[] = []
       const now = Date.now()
       
@@ -595,17 +742,22 @@ export function AssetLibrary() {
       const pack = contentPacks.find(p => p.id === selectedPackId)
       const packTitle = pack?.title || 'Imported'
       
+      // Get MCQs for this specific pack
+      const packMcqs = getMcqsByPack(selectedPackId)
+      console.log('Pack MCQs:', packMcqs.length, 'Selected:', selectedMcqIds.length)
+      
       // Import selected MCQs - each MCQ becomes a separate asset with quizQuestions array
       for (const mcqId of selectedMcqIds) {
-        const libMcq = libraryMcqs.find(m => m.id === mcqId)
+        const libMcq = packMcqs.find(m => m.id === mcqId)
+        console.log('Looking for MCQ:', mcqId, 'Found:', !!libMcq)
         if (libMcq) {
           const newMcq: AssetMCQ = {
             id: uuidv4(),
             userId: user.id,
             type: 'mcq',
-            subjectId: formSubjectId,
+            subjectId: targetSubjectId,
             topicId: formTopicId || '',
-            subtopicId: formSubtopicId || undefined,
+            subtopicId: formSubtopicId || '',
             title: libMcq.question.replace(/<[^>]*>/g, '').substring(0, 50) + '...',
             quizQuestions: [{
               id: uuidv4(),
@@ -624,17 +776,22 @@ export function AssetLibrary() {
         }
       }
       
+      // Get Notes for this specific pack
+      const packNotes = getNotesByPack(selectedPackId)
+      console.log('Pack Notes:', packNotes.length, 'Selected:', selectedNoteIds.length)
+      
       // Import selected Notes
       for (const noteId of selectedNoteIds) {
-        const libNote = libraryNotes.find(n => n.id === noteId)
+        const libNote = packNotes.find(n => n.id === noteId)
+        console.log('Looking for Note:', noteId, 'Found:', !!libNote)
         if (libNote) {
           const newNote: AssetNote = {
             id: uuidv4(),
             userId: user.id,
             type: 'note',
-            subjectId: formSubjectId,
+            subjectId: targetSubjectId,
             topicId: formTopicId || '',
-            subtopicId: formSubtopicId || undefined,
+            subtopicId: formSubtopicId || '',
             title: libNote.title,
             content: libNote.content,
             tags: [packTitle],
@@ -647,20 +804,24 @@ export function AssetLibrary() {
       }
       
       // Bulk create assets
+      console.log('Assets to create:', assetsToCreate.length)
       if (assetsToCreate.length > 0) {
+        console.log('Creating assets in bulk...')
         await createAssetsInBulk(assetsToCreate)
-        // Add to store
-        assetsToCreate.forEach(asset => addAssetToStore(asset))
+        console.log('Bulk create done!')
+        // Firebase subscription will update store automatically
         
         alert(`✅ ${assetsToCreate.length}টি আইটেম সফলভাবে Import হয়েছে!`)
         setShowImportDialog(false)
         setSelectedPackId(null)
         setSelectedMcqIds([])
         setSelectedNoteIds([])
+      } else {
+        alert('❌ কোনো আইটেম Import করা যায়নি। MCQ/Note খুঁজে পাওয়া যায়নি।')
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error importing from library:', err)
-      alert('❌ Import করতে সমস্যা হয়েছে')
+      alert(`❌ Import করতে সমস্যা হয়েছে: ${err?.message || 'Unknown error'}`)
     } finally {
       setImportingItems(false)
     }
@@ -842,26 +1003,58 @@ export function AssetLibrary() {
             ) : (
               <div className="space-y-1">
                 {subjects.map(subject => (
-                  <div key={subject.id}>
-                    <button
-                      onClick={() => {
-                        toggleSubject(subject.id)
-                        setSelectedSubject(subject.id)
-                      }}
-                      className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs text-left hover:bg-muted ${
-                        selectedSubjectId === subject.id ? 'bg-primary/10 text-primary' : ''
-                      }`}
-                    >
-                      {expandedSubjects.includes(subject.id) ? (
-                        <ChevronDown className="h-3 w-3" />
-                      ) : (
-                        <ChevronRight className="h-3 w-3" />
-                      )}
-                      <span className="flex-1 truncate">{subject.name}</span>
-                      <span className="text-muted-foreground">
-                        {assets.filter(a => a.subjectId === subject.id).length}
-                      </span>
-                    </button>
+                  <div key={subject.id} className="group">
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => {
+                          toggleSubject(subject.id)
+                          setSelectedSubject(subject.id)
+                        }}
+                        className={`flex-1 flex items-center gap-2 px-2 py-1.5 rounded text-xs text-left hover:bg-muted ${
+                          selectedSubjectId === subject.id ? 'bg-primary/10 text-primary' : ''
+                        }`}
+                      >
+                        {expandedSubjects.includes(subject.id) ? (
+                          <ChevronDown className="h-3 w-3" />
+                        ) : (
+                          <ChevronRight className="h-3 w-3" />
+                        )}
+                        <span className="flex-1 truncate">{subject.name}</span>
+                        <span className="text-muted-foreground">
+                          {assets.filter(a => a.subjectId === subject.id).length}
+                        </span>
+                      </button>
+                      
+                      {/* Subject Actions Dropdown */}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100"
+                          >
+                            <MoreVertical className="h-3 w-3" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => {
+                            setEditingSubject(subject)
+                            setEditSubjectName(subject.name)
+                          }}>
+                            <Pencil className="h-3 w-3 mr-2" /> Rename
+                          </DropdownMenuItem>
+                          <DropdownMenuItem 
+                            className="text-destructive"
+                            onClick={() => {
+                              setSubjectToDelete(subject)
+                              setShowDeleteSubjectDialog(true)
+                            }}
+                          >
+                            <Trash2 className="h-3 w-3 mr-2" /> Delete
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
                     
                     {/* Topics under Subject */}
                     {expandedSubjects.includes(subject.id) && (
@@ -1010,9 +1203,8 @@ export function AssetLibrary() {
                           size="sm"
                           variant="ghost"
                           className="h-8 w-8 p-0"
-                          onClick={() => {
-                            // TODO: Edit functionality
-                          }}
+                          onClick={() => handleEditMCQ(asset)}
+                          disabled={asset.type !== 'mcq'}
                         >
                           <Edit className="h-4 w-4" />
                         </Button>
@@ -1660,7 +1852,7 @@ export function AssetLibrary() {
               </Button>
               <Button 
                 onClick={handleImportFromLibrary}
-                disabled={importingItems || (selectedMcqIds.length === 0 && selectedNoteIds.length === 0) || !formSubjectId}
+                disabled={importingItems || (selectedMcqIds.length === 0 && selectedNoteIds.length === 0)}
               >
                 {importingItems ? (
                   <RefreshCw className="h-4 w-4 animate-spin mr-2" />
@@ -1671,6 +1863,143 @@ export function AssetLibrary() {
               </Button>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit MCQ Dialog */}
+      <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Edit className="h-5 w-5" />
+              Edit MCQ
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium mb-1 block">Question</label>
+              <Textarea
+                value={editMcqQuestion}
+                onChange={(e) => setEditMcqQuestion(e.target.value)}
+                placeholder="Enter question..."
+                rows={3}
+              />
+            </div>
+            
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Options</label>
+              {editMcqOptions.map((opt, idx) => (
+                <div key={idx} className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    name="editCorrect"
+                    checked={editMcqCorrectIndex === idx}
+                    onChange={() => setEditMcqCorrectIndex(idx)}
+                    className="h-4 w-4"
+                  />
+                  <Input
+                    value={opt}
+                    onChange={(e) => {
+                      const newOpts = [...editMcqOptions]
+                      newOpts[idx] = e.target.value
+                      setEditMcqOptions(newOpts)
+                    }}
+                    placeholder={`Option ${idx + 1}`}
+                  />
+                </div>
+              ))}
+            </div>
+            
+            <div>
+              <label className="text-sm font-medium mb-1 block">Explanation (Optional)</label>
+              <Textarea
+                value={editMcqExplanation}
+                onChange={(e) => setEditMcqExplanation(e.target.value)}
+                placeholder="Explain the correct answer..."
+                rows={2}
+              />
+            </div>
+            
+            <div>
+              <label className="text-sm font-medium mb-1 block">Difficulty</label>
+              <Select value={editMcqDifficulty} onValueChange={(v) => setEditMcqDifficulty(v as 'easy' | 'medium' | 'hard')}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="easy">Easy</SelectItem>
+                  <SelectItem value="medium">Medium</SelectItem>
+                  <SelectItem value="hard">Hard</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            
+            <div className="flex gap-2 justify-end pt-4 border-t">
+              <Button variant="outline" onClick={() => setShowEditDialog(false)}>
+                Cancel
+              </Button>
+              <Button 
+                onClick={handleSaveEditMCQ}
+                disabled={isLoading || !editMcqQuestion.trim() || editMcqOptions.some(o => !o.trim())}
+              >
+                {isLoading ? (
+                  <RefreshCw className="h-4 w-4 animate-spin mr-2" />
+                ) : (
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                )}
+                Save & Sync
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Subject Dialog */}
+      <Dialog open={!!editingSubject} onOpenChange={(open) => !open && setEditingSubject(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Rename Subject</DialogTitle>
+            <DialogDescription>Subject এর নাম পরিবর্তন করুন</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <Input
+              value={editSubjectName}
+              onChange={(e) => setEditSubjectName(e.target.value)}
+              placeholder="Subject name"
+              onKeyDown={(e) => e.key === 'Enter' && handleEditSubject()}
+            />
+            <div className="flex gap-2 justify-end">
+              <Button variant="outline" onClick={() => setEditingSubject(null)}>
+                Cancel
+              </Button>
+              <Button onClick={handleEditSubject} disabled={!editSubjectName.trim()}>
+                Save
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Subject Confirmation Dialog */}
+      <Dialog open={showDeleteSubjectDialog} onOpenChange={setShowDeleteSubjectDialog}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-destructive">Delete Subject?</DialogTitle>
+            <DialogDescription>
+              "{subjectToDelete?.name}" Subject টি মুছে ফেলতে চান? এটি ফিরিয়ে আনা যাবে না।
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex gap-2 justify-end">
+            <Button variant="outline" onClick={() => {
+              setShowDeleteSubjectDialog(false)
+              setSubjectToDelete(null)
+            }}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleDeleteSubject}>
+              <Trash2 className="h-4 w-4 mr-2" /> Delete
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

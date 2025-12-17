@@ -10,6 +10,9 @@
 import { useAssetStore } from '@/stores/asset-store'
 import { usePersonalStore } from '@/stores/personal-store'
 import { useGroupStore } from '@/stores/group-store'
+import { useCoachingStore } from '@/stores/coaching-store'
+import { db } from '@/config/firebase'
+import { doc, setDoc } from 'firebase/firestore'
 import type { AssetMCQ } from '@/types'
 
 /**
@@ -72,17 +75,54 @@ export function syncLibraryToPersonal(assetId: string, questionId: string) {
  */
 export function syncLibraryToGroup(assetId: string, questionId: string) {
   const assetRef = `${assetId}:${questionId}`
-  const { groupMCQs } = useGroupStore.getState()
+  const { groupMCQs, updateGroupMCQ } = useGroupStore.getState()
   const libraryMCQ = getMCQFromLibrary(assetRef)
   
   if (!libraryMCQ) return 0
   
-  // Note: Group store doesn't have updateGroupMCQ yet
-  // We need to add it or use a different approach
   let syncedCount = 0
-  // For now, just count how many would be synced
   groupMCQs.forEach(mcq => {
     if ((mcq as any).assetRef === assetRef) {
+      updateGroupMCQ({
+        ...mcq,
+        question: libraryMCQ.question,
+        options: libraryMCQ.options,
+        correctIndex: libraryMCQ.correctIndex,
+        explanation: libraryMCQ.explanation,
+        difficulty: libraryMCQ.difficulty,
+      })
+      syncedCount++
+    }
+  })
+  
+  return syncedCount
+}
+
+/**
+ * Sync Library MCQ to Coaching Desk
+ * Called when Library MCQ is updated
+ */
+export function syncLibraryToCoaching(assetId: string, questionId: string) {
+  const assetRef = `${assetId}:${questionId}`
+  const { mcqs, updateMCQ } = useCoachingStore.getState()
+  const libraryMCQ = getMCQFromLibrary(assetRef)
+  
+  if (!libraryMCQ) return 0
+  
+  let syncedCount = 0
+  mcqs.forEach(mcq => {
+    if ((mcq as any).assetRef === assetRef) {
+      const updated = {
+        ...mcq,
+        question: libraryMCQ.question,
+        options: libraryMCQ.options,
+        correctIndex: libraryMCQ.correctIndex,
+        explanation: libraryMCQ.explanation,
+        difficulty: libraryMCQ.difficulty as 'easy' | 'medium' | 'hard',
+      }
+      updateMCQ(updated)
+      // Also update in Firebase
+      setDoc(doc(db, 'coaching-mcqs', mcq.id), updated).catch(console.error)
       syncedCount++
     }
   })
@@ -141,17 +181,44 @@ export function syncGroupToLibrary(mcqId: string) {
 }
 
 /**
+ * Sync Coaching Desk MCQ to Library
+ * Called when Coaching MCQ is updated
+ */
+export function syncCoachingToLibrary(mcqId: string) {
+  const { mcqs } = useCoachingStore.getState()
+  const { updateSingleMCQ } = useAssetStore.getState()
+  
+  const mcq = mcqs.find(m => m.id === mcqId)
+  if (!mcq || !(mcq as any).assetRef) return false
+  
+  const parsed = parseAssetRef((mcq as any).assetRef)
+  if (!parsed) return false
+  
+  updateSingleMCQ(parsed.assetId, parsed.questionId, {
+    question: mcq.question,
+    options: mcq.options,
+    correctIndex: mcq.correctIndex,
+    explanation: (mcq as any).explanation,
+    difficulty: mcq.difficulty,
+  })
+  
+  return true
+}
+
+/**
  * Sync all desks from Library
  * Called when a Library MCQ is updated
  */
 export function syncAllDesksFromLibrary(assetId: string, questionId: string) {
   const personalSynced = syncLibraryToPersonal(assetId, questionId)
   const groupSynced = syncLibraryToGroup(assetId, questionId)
+  const coachingSynced = syncLibraryToCoaching(assetId, questionId)
   
   return {
     personal: personalSynced,
     group: groupSynced,
-    total: personalSynced + groupSynced
+    coaching: coachingSynced,
+    total: personalSynced + groupSynced + coachingSynced
   }
 }
 
@@ -266,5 +333,46 @@ export function importToGroup(
   }
   
   addGroupMCQ(newMCQ as any)
+  return newMCQ
+}
+
+/**
+ * Import MCQ from Library to Coaching Desk
+ */
+export function importToCoaching(
+  assetId: string,
+  questionId: string,
+  courseId: string,
+  categoryId: string,
+  userId: string,
+  userName: string
+) {
+  const { addMCQ } = useCoachingStore.getState()
+  const libraryMCQ = getMCQFromLibrary(`${assetId}:${questionId}`)
+  
+  if (!libraryMCQ) return null
+  
+  const newMCQ = {
+    id: `c_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+    courseId,
+    lessonId: '',
+    question: libraryMCQ.question,
+    options: libraryMCQ.options,
+    correctIndex: libraryMCQ.correctIndex,
+    marks: 1,
+    negativeMarks: 0,
+    difficulty: (libraryMCQ.difficulty || 'medium') as 'easy' | 'medium' | 'hard',
+    order: 0,
+    categoryId,
+    explanation: libraryMCQ.explanation,
+    createdBy: userId,
+    createdByName: userName,
+    assetRef: `${assetId}:${questionId}`,
+    createdAt: Date.now(),
+  }
+  
+  addMCQ(newMCQ as any)
+  // Also save to Firebase
+  setDoc(doc(db, 'coaching-mcqs', newMCQ.id), newMCQ).catch(console.error)
   return newMCQ
 }

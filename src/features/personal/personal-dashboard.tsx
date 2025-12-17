@@ -50,6 +50,7 @@ import { v4 as uuidv4 } from 'uuid'
 import ReactQuill from 'react-quill'
 import 'react-quill/dist/quill.snow.css'
 import { TestRunner } from './test-runner'
+import { syncPersonalToLibrary } from '@/lib/asset-sync'
 import type { PersonalSubTab } from '@/components/layout/main-layout'
 import type { PersonalCourse, PersonalTopic, PersonalContentItem, PersonalMCQ, PersonalLiveTest, PersonalLiveTestResult, PersonalAutoLiveTestConfig } from '@/types'
 
@@ -80,6 +81,7 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
     updateContentItem,
     removeContentItem,
     addCourseMCQ,
+    updateCourseMCQ,
     removeCourseMCQ,
     addQuizResult,
     getTopicsByCourse,
@@ -134,6 +136,13 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
   
   // Quiz state
   const [runningQuiz, setRunningQuiz] = useState<{ questions: PersonalMCQ[]; title: string } | null>(null)
+
+  // MCQ Edit state
+  const [editingMcq, setEditingMcq] = useState<PersonalMCQ | null>(null)
+  const [editMcqQuestion, setEditMcqQuestion] = useState('')
+  const [editMcqOptions, setEditMcqOptions] = useState(['', '', '', ''])
+  const [editMcqCorrectIndex, setEditMcqCorrectIndex] = useState(0)
+  const [editMcqExplanation, setEditMcqExplanation] = useState('')
 
   // Asset store for Import from Library
   const {
@@ -460,6 +469,36 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
         ? courseTopics.find(t => t.id === topicId)?.name || 'Quiz'
         : activeCourse?.name || 'Quiz'
     })
+  }
+
+  // MCQ Edit handlers
+  const handleEditMcq = (mcq: PersonalMCQ) => {
+    setEditingMcq(mcq)
+    setEditMcqQuestion(mcq.question)
+    setEditMcqOptions([...mcq.options])
+    setEditMcqCorrectIndex(mcq.correctIndex)
+    setEditMcqExplanation(mcq.explanation || '')
+  }
+
+  const handleSaveEditMcq = async () => {
+    if (!editingMcq || !editMcqQuestion.trim() || editMcqOptions.some(o => !o.trim())) return
+    
+    const updated: PersonalMCQ = {
+      ...editingMcq,
+      question: editMcqQuestion.trim(),
+      options: editMcqOptions.map(o => o.trim()),
+      correctIndex: editMcqCorrectIndex,
+      explanation: editMcqExplanation.trim() || undefined,
+    }
+    
+    updateCourseMCQ(updated)
+    
+    // Sync to Asset Library if linked
+    if (updated.assetRef) {
+      syncPersonalToLibrary(updated.id)
+    }
+    
+    setEditingMcq(null)
   }
 
   // ===========================
@@ -1359,6 +1398,47 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
                           >
                             <Plus className="h-4 w-4" />
                             <span className="font-medium">Add content</span>
+                          </div>
+                        )}
+
+                        {/* MCQ List */}
+                        {topicMCQs.length > 0 && (
+                          <div className="mt-3 pt-3 border-t">
+                            <p className="text-xs font-medium text-muted-foreground mb-2">MCQs ({topicMCQs.length})</p>
+                            <div className="space-y-1">
+                              {topicMCQs.map((mcq, idx) => (
+                                <div 
+                                  key={mcq.id}
+                                  className="flex items-center gap-2 p-2 bg-background rounded border hover:border-primary text-sm"
+                                >
+                                  <HelpCircle className="h-4 w-4 text-blue-500 flex-shrink-0" />
+                                  <span className="flex-1 truncate">{idx + 1}. {mcq.question.replace(/<[^>]*>/g, '').substring(0, 60)}...</span>
+                                  {mcq.assetRef && <span className="text-xs text-green-500" title="Synced with Library">🔗</span>}
+                                  {isEditMode && (
+                                    <DropdownMenu>
+                                      <DropdownMenuTrigger asChild onClick={e => e.stopPropagation()}>
+                                        <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
+                                          <MoreVertical className="h-3 w-3" />
+                                        </Button>
+                                      </DropdownMenuTrigger>
+                                      <DropdownMenuContent>
+                                        <DropdownMenuItem onClick={() => handleEditMcq(mcq)}>
+                                          <Pencil className="h-4 w-4 mr-2" /> Edit
+                                        </DropdownMenuItem>
+                                        <DropdownMenuItem 
+                                          className="text-destructive"
+                                          onClick={() => {
+                                            if (confirm('Delete this MCQ?')) removeCourseMCQ(mcq.id)
+                                          }}
+                                        >
+                                          <Trash2 className="h-4 w-4 mr-2" /> Delete
+                                        </DropdownMenuItem>
+                                      </DropdownMenuContent>
+                                    </DropdownMenu>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
                           </div>
                         )}
 
@@ -2610,6 +2690,93 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
               <div className="flex gap-2 justify-end pt-4">
                 <Button variant="outline" onClick={() => setEditingContent(null)}>Cancel</Button>
                 <Button onClick={handleSaveContent}>Save</Button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* MCQ Edit Dialog */}
+      <AnimatePresence>
+        {editingMcq && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+            onClick={() => setEditingMcq(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-background rounded-lg shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-4"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-semibold flex items-center gap-2">
+                  <Pencil className="h-4 w-4" /> Edit MCQ
+                  {editingMcq.assetRef && <span className="text-xs text-green-500">(🔗 Library Synced)</span>}
+                </h3>
+                <Button variant="ghost" size="sm" onClick={() => setEditingMcq(null)}>
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="text-sm font-medium mb-1 block">Question</label>
+                  <Textarea
+                    value={editMcqQuestion}
+                    onChange={(e) => setEditMcqQuestion(e.target.value)}
+                    placeholder="Enter question..."
+                    rows={3}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Options</label>
+                  {editMcqOptions.map((opt, idx) => (
+                    <div key={idx} className="flex items-center gap-2">
+                      <input
+                        type="radio"
+                        name="editCorrect"
+                        checked={editMcqCorrectIndex === idx}
+                        onChange={() => setEditMcqCorrectIndex(idx)}
+                        className="h-4 w-4"
+                      />
+                      <Input
+                        value={opt}
+                        onChange={(e) => {
+                          const newOpts = [...editMcqOptions]
+                          newOpts[idx] = e.target.value
+                          setEditMcqOptions(newOpts)
+                        }}
+                        placeholder={`Option ${idx + 1}`}
+                      />
+                    </div>
+                  ))}
+                </div>
+
+                <div>
+                  <label className="text-sm font-medium mb-1 block">Explanation (Optional)</label>
+                  <Textarea
+                    value={editMcqExplanation}
+                    onChange={(e) => setEditMcqExplanation(e.target.value)}
+                    placeholder="Explain the correct answer..."
+                    rows={2}
+                  />
+                </div>
+
+                <div className="flex gap-2 justify-end pt-4 border-t">
+                  <Button variant="outline" onClick={() => setEditingMcq(null)}>Cancel</Button>
+                  <Button 
+                    onClick={handleSaveEditMcq}
+                    disabled={!editMcqQuestion.trim() || editMcqOptions.some(o => !o.trim())}
+                  >
+                    <RefreshCw className="h-4 w-4 mr-1" /> Save {editingMcq.assetRef && '& Sync'}
+                  </Button>
+                </div>
               </div>
             </motion.div>
           </motion.div>
