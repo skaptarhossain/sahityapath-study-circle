@@ -97,16 +97,16 @@ export function ReportDialog({
             <div className="w-16 h-16 rounded-full bg-green-500/10 flex items-center justify-center mx-auto mb-4">
               <Send className="h-8 w-8 text-green-500" />
             </div>
-            <h3 className="font-semibold text-lg">রিপোর্ট পাঠানো হয়েছে!</h3>
+            <h3 className="font-semibold text-lg">Report Submitted!</h3>
             <p className="text-sm text-muted-foreground mt-2">
-              আপনার রিপোর্ট content creator-কে জানানো হবে।
+              Your report will be reviewed by the content creator.
             </p>
           </div>
         ) : (
           <div className="space-y-4">
             <div>
               <p className="text-sm text-muted-foreground mb-3">
-                "{contentTitle}" সম্পর্কে রিপোর্ট করুন:
+                Report "{contentTitle}":
               </p>
               
               <div className="grid grid-cols-2 gap-2">

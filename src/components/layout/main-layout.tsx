@@ -16,6 +16,7 @@ import {
   FileText,
   Library,
   Shield,
+  Search,
 } from 'lucide-react'
 import { signOut } from 'firebase/auth'
 import { auth } from '@/config/firebase'
@@ -23,6 +24,8 @@ import { useAuthStore } from '@/stores/auth-store'
 import { Button } from '@/components/ui/button'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { NotificationBell } from '@/components/notification-bell'
+import { GlobalSearch } from '@/components/global-search'
+import { useLiveTestStore } from '@/stores/live-test-store'
 import type { User } from '@/types'
 import { cn } from '@/lib/utils'
 
@@ -102,7 +105,20 @@ export function MainLayout() {
   })
   
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
   const { user, setUser } = useAuthStore()
+  const { targetTab, setTargetTab } = useLiveTestStore()
+  
+  // Handle live test navigation from notification
+  const handleLiveTestClick = () => {
+    const target = targetTab || 'personal'
+    setActiveTab(target)
+    if (target === 'personal') {
+      setPersonalTab('live-test')
+    } else if (target === 'group') {
+      setGroupTab('live-test')
+    }
+  }
 
   // Android Back Button Handling
   useEffect(() => {
@@ -164,6 +180,18 @@ export function MainLayout() {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY_COACHING_TAB, coachingTab)
   }, [coachingTab])
+
+  // Keyboard shortcut for search (Cmd+K or Ctrl+K)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault()
+        setSearchOpen(true)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
 
   // Get current sub-tabs based on active main tab
   const getCurrentSubTabs = () => {
@@ -231,7 +259,17 @@ export function MainLayout() {
         <h1 className="text-base font-semibold text-primary">
           📚 Group Study 2.0
         </h1>
-        <NotificationBell />
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9"
+            onClick={() => setSearchOpen(true)}
+          >
+            <Search className="h-5 w-5" />
+          </Button>
+          <NotificationBell onLiveTestClick={handleLiveTestClick} />
+        </div>
       </header>
 
       {/* Mobile Sidebar Overlay */}
@@ -271,6 +309,10 @@ export function MainLayout() {
                 }}
                 onLogout={handleLogout}
                 isAdmin={isAdmin}
+                onLiveTestClick={() => {
+                  handleLiveTestClick()
+                  setSidebarOpen(false)
+                }}
               />
             </motion.aside>
           </>
@@ -293,6 +335,7 @@ export function MainLayout() {
           setActiveTab={setActiveTab}
           onLogout={handleLogout}
           isAdmin={isAdmin}
+          onLiveTestClick={handleLiveTestClick}
         />
       </aside>
 
@@ -366,6 +409,19 @@ export function MainLayout() {
           </div>
         )}
       </nav>
+
+      {/* Global Search Dialog */}
+      <GlobalSearch 
+        open={searchOpen} 
+        onOpenChange={setSearchOpen}
+        onNavigateToGroup={(groupId) => {
+          setActiveTab('group')
+          setGroupTab('course')
+        }}
+        onNavigateToLibrary={() => {
+          setActiveTab('library')
+        }}
+      />
     </div>
   )
 }
@@ -376,6 +432,7 @@ interface SidebarContentProps {
   setActiveTab: (tab: MainTab) => void
   onLogout: () => void
   isAdmin: boolean
+  onLiveTestClick?: () => void
 }
 
 function SidebarContent({
@@ -384,6 +441,7 @@ function SidebarContent({
   setActiveTab,
   onLogout,
   isAdmin,
+  onLiveTestClick,
 }: SidebarContentProps) {
   return (
     <>
@@ -441,7 +499,7 @@ function SidebarContent({
       {/* Footer */}
       <div className="mt-auto pt-4 border-t border-border space-y-2">
         <div className="hidden lg:block">
-          <NotificationBell />
+          <NotificationBell onLiveTestClick={onLiveTestClick} />
         </div>
         <Button
           variant="ghost"

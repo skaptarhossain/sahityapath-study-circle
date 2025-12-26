@@ -135,7 +135,15 @@ interface PersonalState {
   
   // Auto Live Test Config Actions
   setAutoLiveTestConfig: (config: PersonalAutoLiveTestConfig) => void
+  addAutoLiveTestConfig: (config: PersonalAutoLiveTestConfig) => void
+  removeAutoLiveTestConfig: (configId: string) => void
   getAutoLiveTestConfig: (courseId: string) => PersonalAutoLiveTestConfig | undefined
+  getAutoLiveTestConfigs: (courseId: string) => PersonalAutoLiveTestConfig[]
+  getAllAutoLiveTestConfigs: () => PersonalAutoLiveTestConfig[]
+  
+  // Global Auto Test Config (without course) - uses courseId: 'global'
+  getGlobalAutoTestConfig: () => PersonalAutoLiveTestConfig | undefined
+  getGlobalAutoTestConfigs: () => PersonalAutoLiveTestConfig[]
   
   // Helper Functions
   getActiveCourse: () => PersonalCourse | undefined
@@ -384,10 +392,15 @@ export const usePersonalStore = create<PersonalState>()(
       
       // Live Test Actions
       addLiveTest: async (test) => {
+        console.log('🔄 Adding live test to state:', test.id, test.title)
         set(state => ({ liveTests: [...state.liveTests, test] }))
         try {
           await setDoc(doc(db, 'personal-live-tests', test.id), test)
-        } catch (e) { console.error('Error saving live test:', e) }
+          console.log('✅ Live test saved to Firebase:', test.id)
+        } catch (e) { 
+          console.error('❌ Error saving live test:', e) 
+          alert('Failed to save Live Test to cloud. Please try again.')
+        }
       },
       
       updateLiveTest: async (test) => {
@@ -431,18 +444,83 @@ export const usePersonalStore = create<PersonalState>()(
       
       // Auto Live Test Config Actions
       setAutoLiveTestConfig: async (config) => {
+        // First update local state immediately
         set(state => ({
           autoLiveTestConfigs: state.autoLiveTestConfigs.some(c => c.courseId === config.courseId)
-            ? state.autoLiveTestConfigs.map(c => c.courseId === config.courseId ? config : c)
+            ? state.autoLiveTestConfigs.map(c => c.id === config.id ? config : c)
             : [...state.autoLiveTestConfigs, config]
         }))
+        
+        // Then try to save to Firebase
         try {
-          await setDoc(doc(db, 'personal-auto-test-configs', config.id), config)
-        } catch (e) { console.error('Error saving auto test config:', e) }
+          console.log('🔄 Saving auto test config to Firebase...', config.id)
+          const docRef = doc(db, 'personal-auto-test-configs', config.id)
+          await setDoc(docRef, config)
+          console.log('✅ Auto test config saved successfully to Firebase:', config.id)
+        } catch (e: any) { 
+          console.error('❌ Firebase save error:', {
+            code: e?.code,
+            message: e?.message,
+            name: e?.name,
+            details: e
+          })
+          alert(`⚠️ Could not save to cloud: ${e?.message || 'Unknown error'}`)
+        }
+      },
+      
+      // Add new auto test config (always creates new)
+      addAutoLiveTestConfig: async (config) => {
+        set(state => ({
+          autoLiveTestConfigs: [...state.autoLiveTestConfigs, config]
+        }))
+        
+        try {
+          const docRef = doc(db, 'personal-auto-test-configs', config.id)
+          await setDoc(docRef, config)
+          console.log('✅ New auto test config added:', config.id)
+        } catch (e: any) { 
+          console.error('❌ Firebase save error:', e)
+          alert(`⚠️ Could not save to cloud: ${e?.message || 'Unknown error'}`)
+        }
+      },
+      
+      // Remove auto test config
+      removeAutoLiveTestConfig: async (configId) => {
+        set(state => ({
+          autoLiveTestConfigs: state.autoLiveTestConfigs.filter(c => c.id !== configId)
+        }))
+        
+        try {
+          const docRef = doc(db, 'personal-auto-test-configs', configId)
+          await deleteDoc(docRef)
+          console.log('✅ Auto test config deleted:', configId)
+        } catch (e: any) { 
+          console.error('❌ Firebase delete error:', e)
+        }
       },
       
       getAutoLiveTestConfig: (courseId) => {
         return get().autoLiveTestConfigs.find(c => c.courseId === courseId)
+      },
+      
+      // Get all auto test configs for a course
+      getAutoLiveTestConfigs: (courseId) => {
+        return get().autoLiveTestConfigs.filter(c => c.courseId === courseId)
+      },
+      
+      // Get all auto test configs
+      getAllAutoLiveTestConfigs: () => {
+        return get().autoLiveTestConfigs
+      },
+      
+      // Global Auto Test Config (uses courseId: 'global')
+      getGlobalAutoTestConfig: () => {
+        return get().autoLiveTestConfigs.find(c => c.courseId === 'global')
+      },
+      
+      // Get all global auto test configs
+      getGlobalAutoTestConfigs: () => {
+        return get().autoLiveTestConfigs.filter(c => c.courseId === 'global')
       },
       
       // Helper Functions

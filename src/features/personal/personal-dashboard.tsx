@@ -35,6 +35,8 @@ import {
   CheckCircle2,
   XCircle,
   CircleDot,
+  Vibrate,
+  Grid3X3,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -42,15 +44,19 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { usePersonalStore } from '@/stores/personal-store'
 import { useAuthStore } from '@/stores/auth-store'
 import { useAssetStore } from '@/stores/asset-store'
+import { useThemeStore } from '@/stores/theme-store'
+import { useLiveTestStore } from '@/stores/live-test-store'
 import { v4 as uuidv4 } from 'uuid'
 import ReactQuill from 'react-quill'
 import 'react-quill/dist/quill.snow.css'
 import { TestRunner } from './test-runner'
 import { syncPersonalToLibrary } from '@/lib/asset-sync'
+import { ResultAnalysis, ResultAnalysisSettings, LiveTestManagement, type LiveTestConfig, type AutoTestConfig, type CategoryOption } from '@/components/live-test'
 import type { PersonalSubTab } from '@/components/layout/main-layout'
 import type { PersonalCourse, PersonalTopic, PersonalContentItem, PersonalMCQ, PersonalLiveTest, PersonalLiveTestResult, PersonalAutoLiveTestConfig } from '@/types'
 
@@ -98,7 +104,12 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
     addLiveTestResult,
     getLiveTestResultsByTest,
     setAutoLiveTestConfig,
+    addAutoLiveTestConfig,
+    removeAutoLiveTestConfig,
     getAutoLiveTestConfig,
+    getAutoLiveTestConfigs,
+    getGlobalAutoTestConfig,
+    getGlobalAutoTestConfigs,
   } = usePersonalStore()
 
   // Local state
@@ -133,6 +144,7 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
   const [mcqOptions, setMcqOptions] = useState(['', '', '', ''])
   const [mcqCorrect, setMcqCorrect] = useState(0)
   const [mcqExplanation, setMcqExplanation] = useState('')
+  const [mcqDifficulty, setMcqDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium')
   
   // Quiz state
   const [runningQuiz, setRunningQuiz] = useState<{ questions: PersonalMCQ[]; title: string } | null>(null)
@@ -143,6 +155,7 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
   const [editMcqOptions, setEditMcqOptions] = useState(['', '', '', ''])
   const [editMcqCorrectIndex, setEditMcqCorrectIndex] = useState(0)
   const [editMcqExplanation, setEditMcqExplanation] = useState('')
+  const [editMcqDifficulty, setEditMcqDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium')
 
   // Asset store for Import from Library
   const {
@@ -153,7 +166,11 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
     setSelectedSubject: setAssetSelectedSubject,
     setSelectedTopic: setAssetSelectedTopic,
     getTopicsBySubject: getAssetTopicsBySubject,
+    getSubtopicsByTopic: getAssetSubtopicsByTopic,
   } = useAssetStore()
+
+  // Theme store for haptic feedback
+  const { hapticEnabled, setHapticEnabled, triggerHaptic } = useThemeStore()
 
   // ===========================
   // Live Test State
@@ -170,6 +187,8 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
   const [liveTestStartedAt, setLiveTestStartedAt] = useState<number>(0)
   const [viewingLiveTestResult, setViewingLiveTestResult] = useState<PersonalLiveTestResult | null>(null)
   const [viewingLiveTestSolutions, setViewingLiveTestSolutions] = useState(false)
+  const [solutionsQuestions, setSolutionsQuestions] = useState<PersonalMCQ[]>([])
+  const [showQuestionNav, setShowQuestionNav] = useState(false)
   
   // Create Live Test form
   const [showCreateLiveTest, setShowCreateLiveTest] = useState(false)
@@ -178,6 +197,11 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
   const [newLiveTestCategories, setNewLiveTestCategories] = useState<string[]>([])
   const [newLiveTestQuestionCount, setNewLiveTestQuestionCount] = useState('20')
   const [newLiveTestShowSolution, setNewLiveTestShowSolution] = useState(true)
+  // Asset Library source for Live Test
+  const [liveTestSource, setLiveTestSource] = useState<'course' | 'library'>('library')
+  const [liveTestLibrarySubject, setLiveTestLibrarySubject] = useState<string>('')
+  const [liveTestLibraryTopic, setLiveTestLibraryTopic] = useState<string>('')
+  const [liveTestLibrarySubtopic, setLiveTestLibrarySubtopic] = useState<string>('')
   
   // Auto Daily Test states
   const [autoTestEnabled, setAutoTestEnabled] = useState(false)
@@ -189,6 +213,31 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
   const [autoTestQuestionCount, setAutoTestQuestionCount] = useState('20')
   const [autoTestDays, setAutoTestDays] = useState<number[]>([0, 1, 2, 3, 4, 5, 6])
   const [autoTestShowSolution, setAutoTestShowSolution] = useState(true)
+  const [autoTestDifficulty, setAutoTestDifficulty] = useState<'all' | 'easy' | 'medium' | 'hard'>('all')
+  // New Result Analysis Settings
+  const [autoTestResultReleaseTime, setAutoTestResultReleaseTime] = useState('23:00')
+  const [autoTestShowLeaderboard, setAutoTestShowLeaderboard] = useState(true)
+  const [autoTestShowDetailedAnalysis, setAutoTestShowDetailedAnalysis] = useState(true)
+  
+  // GLOBAL Auto Daily Test states (without course)
+  const [globalAutoTestEnabled, setGlobalAutoTestEnabled] = useState(false)
+  const [globalAutoTestTitle, setGlobalAutoTestTitle] = useState('Daily Practice Test')
+  const [globalAutoTestSubject, setGlobalAutoTestSubject] = useState<string>('')
+  const [globalAutoTestTopic, setGlobalAutoTestTopic] = useState<string>('')
+  const [globalAutoTestSubtopic, setGlobalAutoTestSubtopic] = useState<string>('')
+  const [globalAutoTestStartTime, setGlobalAutoTestStartTime] = useState('10:00')
+  const [globalAutoTestEndTime, setGlobalAutoTestEndTime] = useState('22:00')
+  const [globalAutoTestDuration, setGlobalAutoTestDuration] = useState('30')
+  const [globalAutoTestQuestionCount, setGlobalAutoTestQuestionCount] = useState('20')
+  const [globalAutoTestDays, setGlobalAutoTestDays] = useState<number[]>([0, 1, 2, 3, 4, 5, 6])
+  const [globalAutoTestShowSolution, setGlobalAutoTestShowSolution] = useState(true)
+  const [globalAutoTestDifficulty, setGlobalAutoTestDifficulty] = useState<'all' | 'easy' | 'medium' | 'hard'>('all')
+  const [globalAutoTestResultReleaseTime, setGlobalAutoTestResultReleaseTime] = useState('23:00')
+  const [globalAutoTestShowLeaderboard, setGlobalAutoTestShowLeaderboard] = useState(true)
+  
+  // Result Analysis Dialog
+  const [showResultAnalysis, setShowResultAnalysis] = useState(false)
+  const [selectedResultForAnalysis, setSelectedResultForAnalysis] = useState<any>(null)
 
   // Active course
   const activeCourse = activeCourseId ? courses.find(c => c.id === activeCourseId) : null
@@ -202,21 +251,158 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
     ? courseMCQs.filter(m => m.courseId === activeCourseId)
     : []
     
-  // Live Tests for this course
+  // Live Tests for this course (includes both course and library source)
   const courseLiveTests = useMemo(() => {
-    if (!activeCourseId) return []
-    return getLiveTestsByCourse(activeCourseId).sort((a, b) => b.createdAt - a.createdAt)
-  }, [activeCourseId, liveTests])
+    if (!user) return []
+    // Get all live tests for this user
+    const userTests = liveTests.filter(t => t.userId === user.id)
+    // If course is selected, show:
+    // 1. Tests created for this course
+    // 2. Library-based tests (courseId === 'library' or source === 'library')
+    // 3. Global tests (courseId === 'global')
+    if (activeCourseId) {
+      return userTests.filter(t => 
+        t.courseId === activeCourseId || 
+        t.courseId === 'library' || // Library tests available everywhere
+        t.courseId === 'global' || // Global tests
+        t.source === 'library' || 
+        !t.courseId
+      ).sort((a, b) => b.createdAt - a.createdAt)
+    }
+    // If no course selected, show all user tests
+    return userTests.sort((a, b) => b.createdAt - a.createdAt)
+  }, [activeCourseId, liveTests, user])
+
+  // Asset Library topics for selected subject
+  const libraryTopicsForSubject = useMemo(() => {
+    if (!liveTestLibrarySubject) return []
+    return getAssetTopicsBySubject(liveTestLibrarySubject)
+  }, [liveTestLibrarySubject, getAssetTopicsBySubject])
+
+  // Asset Library subtopics for selected topic
+  const librarySubtopicsForTopic = useMemo(() => {
+    if (!liveTestLibraryTopic) return []
+    return getAssetSubtopicsByTopic(liveTestLibraryTopic)
+  }, [liveTestLibraryTopic, getAssetSubtopicsByTopic])
+
+  // Get MCQs from Asset Library based on selection
+  // Get MCQs count from Asset Library based on selection
+  const libraryMCQs = useMemo(() => {
+    if (liveTestSource !== 'library') return []
+    
+    let filteredAssets = allAssets.filter(a => a.type === 'mcq')
+    
+    if (liveTestLibrarySubject) {
+      filteredAssets = filteredAssets.filter(a => a.subjectId === liveTestLibrarySubject)
+    }
+    if (liveTestLibraryTopic) {
+      filteredAssets = filteredAssets.filter(a => a.topicId === liveTestLibraryTopic)
+    }
+    if (liveTestLibrarySubtopic) {
+      filteredAssets = filteredAssets.filter(a => a.subtopicId === liveTestLibrarySubtopic)
+    }
+    
+    // Count actual MCQ questions (flatten quizQuestions)
+    const questions: any[] = []
+    filteredAssets.forEach(asset => {
+      if (asset.type === 'mcq' && 'quizQuestions' in asset) {
+        const mcqAsset = asset as any
+        mcqAsset.quizQuestions?.forEach((q: any) => {
+          questions.push(q)
+        })
+      }
+    })
+    
+    return questions
+  }, [liveTestSource, liveTestLibrarySubject, liveTestLibraryTopic, liveTestLibrarySubtopic, allAssets])
   
-  // Auto Test Config for this course
+  // Auto Test Configs for this course (multiple, only enabled for banners)
+  const courseAutoTestConfigs = useMemo(() => {
+    if (!activeCourseId) return []
+    return getAutoLiveTestConfigs(activeCourseId).filter(c => c.enabled)
+  }, [activeCourseId, getAutoLiveTestConfigs])
+  
+  // All Auto Test Configs for this course (includes disabled, for settings list)
+  const allCourseAutoTestConfigs = useMemo(() => {
+    if (!activeCourseId) return []
+    return getAutoLiveTestConfigs(activeCourseId)
+  }, [activeCourseId, getAutoLiveTestConfigs])
+  
+  // Auto Test Config for this course (first one for backward compatibility)
   const currentAutoTestConfig = useMemo(() => {
     if (!activeCourseId) return null
     return getAutoLiveTestConfig(activeCourseId)
   }, [activeCourseId, getAutoLiveTestConfig])
   
-  // Check if Auto Test is currently active
+  // Global Auto Test Configs (only enabled, for Live Test banner)
+  const globalAutoTestConfigs = useMemo(() => {
+    return getGlobalAutoTestConfigs().filter(c => c.enabled)
+  }, [getGlobalAutoTestConfigs])
+  
+  // All Global Auto Test Configs (for Settings list - includes disabled)
+  const allGlobalAutoTestConfigs = useMemo(() => {
+    return getGlobalAutoTestConfigs()
+  }, [getGlobalAutoTestConfigs])
+  
+  // Global Auto Test Config (first one for backward compatibility)
+  const globalAutoTestConfig = useMemo(() => {
+    return getGlobalAutoTestConfig()
+  }, [getGlobalAutoTestConfig])
+  
+  // Check if user has already taken today's GLOBAL auto test
+  const hasCompletedTodayGlobalTest = useMemo(() => {
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    const todayStart = today.getTime()
+    const todayEnd = todayStart + 24 * 60 * 60 * 1000
+    
+    return liveTestResults.some(r => 
+      r.testId.startsWith('global-auto-') && 
+      r.submittedAt >= todayStart && 
+      r.submittedAt < todayEnd
+    )
+  }, [liveTestResults])
+  
+  // Check if Global Auto Test is currently active
+  const isGlobalAutoTestActive = useMemo(() => {
+    if (!globalAutoTestConfig || !globalAutoTestConfig.enabled) return false
+    if (hasCompletedTodayGlobalTest) return false
+    
+    const now = new Date()
+    const currentDay = now.getDay()
+    if (!globalAutoTestConfig.activeDays.includes(currentDay)) return false
+    
+    const [startH, startM] = globalAutoTestConfig.startTime.split(':').map(Number)
+    const [endH, endM] = globalAutoTestConfig.endTime.split(':').map(Number)
+    const currentMinutes = now.getHours() * 60 + now.getMinutes()
+    const startMinutes = startH * 60 + startM
+    const endMinutes = endH * 60 + endM
+    
+    return currentMinutes >= startMinutes && currentMinutes <= endMinutes
+  }, [globalAutoTestConfig, hasCompletedTodayGlobalTest])
+  
+  // Check if user has already taken today's auto test
+  const hasCompletedTodayTest = useMemo(() => {
+    if (!activeCourseId) return false
+    
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    const todayStart = today.getTime()
+    const todayEnd = todayStart + 24 * 60 * 60 * 1000
+    
+    // Check if there's a result for auto test submitted today
+    return liveTestResults.some(r => 
+      r.testId.startsWith('auto-') && 
+      r.courseId === activeCourseId &&
+      r.submittedAt >= todayStart && 
+      r.submittedAt < todayEnd
+    )
+  }, [liveTestResults, activeCourseId])
+  
+  // Check if Auto Test is currently active (and not already completed today)
   const isAutoTestActive = useMemo(() => {
     if (!currentAutoTestConfig || !currentAutoTestConfig.enabled) return false
+    if (hasCompletedTodayTest) return false // Already completed today
     
     const now = new Date()
     const currentDay = now.getDay()
@@ -229,7 +415,23 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
     const endMinutes = endH * 60 + endM
     
     return currentTime >= startMinutes && currentTime <= endMinutes
-  }, [currentAutoTestConfig])
+  }, [currentAutoTestConfig, hasCompletedTodayTest])
+  
+  // Sync Live Test active status to global store
+  const { setLiveTestActive, setActiveTestTitle, setTargetTab } = useLiveTestStore()
+  
+  useEffect(() => {
+    setLiveTestActive(isAutoTestActive)
+    setActiveTestTitle(isAutoTestActive ? (currentAutoTestConfig?.title || 'Daily Test') : null)
+    setTargetTab(isAutoTestActive ? 'personal' : null)
+    
+    // Cleanup on unmount
+    return () => {
+      setLiveTestActive(false)
+      setActiveTestTitle(null)
+      setTargetTab(null)
+    }
+  }, [isAutoTestActive, currentAutoTestConfig?.title, setLiveTestActive, setActiveTestTitle, setTargetTab])
   
   // Load Auto Test config when course changes
   useEffect(() => {
@@ -243,6 +445,11 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
       setAutoTestQuestionCount(String(currentAutoTestConfig.questionCount))
       setAutoTestDays(currentAutoTestConfig.activeDays)
       setAutoTestShowSolution(currentAutoTestConfig.showSolution)
+      // Load new analysis settings
+      setAutoTestResultReleaseTime(currentAutoTestConfig.resultReleaseTime || '23:00')
+      setAutoTestShowLeaderboard(currentAutoTestConfig.showLeaderboard ?? true)
+      setAutoTestShowDetailedAnalysis(currentAutoTestConfig.showDetailedAnalysis ?? true)
+      setAutoTestDifficulty(currentAutoTestConfig.difficulty || 'all')
     } else {
       // Reset to defaults
       setAutoTestEnabled(false)
@@ -254,8 +461,32 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
       setAutoTestQuestionCount('20')
       setAutoTestDays([0, 1, 2, 3, 4, 5, 6])
       setAutoTestShowSolution(true)
+      setAutoTestResultReleaseTime('23:00')
+      setAutoTestShowLeaderboard(true)
+      setAutoTestShowDetailedAnalysis(true)
+      setAutoTestDifficulty('all')
     }
   }, [currentAutoTestConfig, activeCourseId])
+
+  // Load Global Auto Test config
+  useEffect(() => {
+    if (globalAutoTestConfig) {
+      setGlobalAutoTestEnabled(globalAutoTestConfig.enabled)
+      setGlobalAutoTestTitle(globalAutoTestConfig.title)
+      setGlobalAutoTestSubject(globalAutoTestConfig.librarySubjectId || '')
+      setGlobalAutoTestTopic(globalAutoTestConfig.libraryTopicId || '')
+      setGlobalAutoTestSubtopic(globalAutoTestConfig.librarySubtopicId || '')
+      setGlobalAutoTestStartTime(globalAutoTestConfig.startTime)
+      setGlobalAutoTestEndTime(globalAutoTestConfig.endTime)
+      setGlobalAutoTestDuration(String(globalAutoTestConfig.duration))
+      setGlobalAutoTestQuestionCount(String(globalAutoTestConfig.questionCount))
+      setGlobalAutoTestDays(globalAutoTestConfig.activeDays)
+      setGlobalAutoTestShowSolution(globalAutoTestConfig.showSolution)
+      setGlobalAutoTestResultReleaseTime(globalAutoTestConfig.resultReleaseTime || '23:00')
+      setGlobalAutoTestShowLeaderboard(globalAutoTestConfig.showLeaderboard ?? true)
+      setGlobalAutoTestDifficulty(globalAutoTestConfig.difficulty || 'all')
+    }
+  }, [globalAutoTestConfig])
 
   // Load data on mount
   useEffect(() => {
@@ -265,6 +496,13 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
       return () => unsub()
     }
   }, [user?.id])
+
+  // Auto-select course if only one exists and none selected
+  useEffect(() => {
+    if (courses.length === 1 && !activeCourseId) {
+      setActiveCourse(courses[0].id)
+    }
+  }, [courses, activeCourseId, setActiveCourse])
 
   // Toggle topic expansion
   const toggleTopic = (topicId: string) => {
@@ -442,6 +680,7 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
       options: mcqOptions.filter(o => o.trim()),
       correctIndex: mcqCorrect,
       explanation: mcqExplanation.trim() || undefined,
+      difficulty: mcqDifficulty,
       createdAt: Date.now(),
     }
     addCourseMCQ(mcq)
@@ -450,6 +689,7 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
     setMcqOptions(['', '', '', ''])
     setMcqCorrect(0)
     setMcqExplanation('')
+    setMcqDifficulty('medium')
   }
 
   // Start quiz
@@ -478,6 +718,7 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
     setEditMcqOptions([...mcq.options])
     setEditMcqCorrectIndex(mcq.correctIndex)
     setEditMcqExplanation(mcq.explanation || '')
+    setEditMcqDifficulty(mcq.difficulty || 'medium')
   }
 
   const handleSaveEditMcq = async () => {
@@ -489,6 +730,7 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
       options: editMcqOptions.map(o => o.trim()),
       correctIndex: editMcqCorrectIndex,
       explanation: editMcqExplanation.trim() || undefined,
+      difficulty: editMcqDifficulty,
     }
     
     updateCourseMCQ(updated)
@@ -507,25 +749,41 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
   
   // Create Manual Live Test
   const handleCreateLiveTest = () => {
-    if (!newLiveTestTitle.trim() || !activeCourseId || !user) {
+    if (!newLiveTestTitle.trim() || !user) {
       alert('Please enter a test title')
       return
     }
     
-    // Get questions based on selected categories
-    let availableQuestions = courseMCQList
-    if (newLiveTestCategories.length > 0) {
-      availableQuestions = courseMCQList.filter(q => newLiveTestCategories.includes(q.categoryId || ''))
+    // Get questions based on source
+    let availableQuestions: any[] = []
+    
+    if (liveTestSource === 'library') {
+      // Use Asset Library MCQs
+      if (!liveTestLibrarySubject) {
+        alert('Please select a subject from Asset Library')
+        return
+      }
+      availableQuestions = libraryMCQs
+    } else {
+      // Use Course MCQs
+      if (!activeCourseId) {
+        alert('Please select a course first')
+        return
+      }
+      availableQuestions = courseMCQList
+      if (newLiveTestCategories.length > 0) {
+        availableQuestions = courseMCQList.filter(q => newLiveTestCategories.includes(q.categoryId || ''))
+      }
     }
     
     if (availableQuestions.length === 0) {
-      alert('No questions available in selected categories')
+      alert('No questions available. Please add MCQs first.')
       return
     }
     
     const liveTest: PersonalLiveTest = {
       id: uuidv4(),
-      courseId: activeCourseId,
+      courseId: activeCourseId || 'library',
       userId: user.id,
       title: newLiveTestTitle.trim(),
       categoryIds: newLiveTestCategories,
@@ -533,7 +791,12 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
       duration: parseInt(newLiveTestDuration),
       status: 'scheduled',
       showSolution: newLiveTestShowSolution,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      // Asset Library fields
+      source: liveTestSource,
+      librarySubjectId: liveTestSource === 'library' ? liveTestLibrarySubject : undefined,
+      libraryTopicId: liveTestSource === 'library' ? liveTestLibraryTopic : undefined,
+      librarySubtopicId: liveTestSource === 'library' ? liveTestLibrarySubtopic : undefined,
     }
     
     addLiveTest(liveTest)
@@ -545,6 +808,9 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
     setNewLiveTestCategories([])
     setNewLiveTestQuestionCount('20')
     setNewLiveTestShowSolution(true)
+    setLiveTestLibrarySubject('')
+    setLiveTestLibraryTopic('')
+    setLiveTestLibrarySubtopic('')
     
     alert('Live Test created successfully!')
   }
@@ -571,6 +837,11 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
       questionCount: parseInt(autoTestQuestionCount),
       activeDays: autoTestDays,
       showSolution: autoTestShowSolution,
+      // New analysis settings
+      resultReleaseTime: autoTestResultReleaseTime,
+      showLeaderboard: autoTestShowLeaderboard,
+      showDetailedAnalysis: autoTestShowDetailedAnalysis,
+      difficulty: autoTestDifficulty,
       createdAt: currentAutoTestConfig?.createdAt || Date.now(),
       updatedAt: Date.now()
     }
@@ -579,16 +850,343 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
     alert('Auto Daily Test settings saved!')
   }
   
-  // Start Live Test (Manual or Auto)
-  const startLiveTest = (test: PersonalLiveTest) => {
-    // Get questions based on categories
-    let availableQuestions = courseMCQList
-    if (test.categoryIds.length > 0) {
-      availableQuestions = courseMCQList.filter(q => test.categoryIds.includes(q.categoryId || ''))
+  // ===========================
+  // Shared Component Handlers
+  // ===========================
+  
+  // Handle create test from shared component
+  const handleCreateTestFromShared = (test: Omit<LiveTestConfig, 'id' | 'createdAt'>) => {
+    if (!user) return
+    
+    // Get questions based on source
+    let availableQuestions: any[] = []
+    
+    if (test.source === 'library') {
+      if (!test.librarySubjectId) {
+        alert('Please select a subject from Asset Library')
+        return
+      }
+      availableQuestions = libraryMCQs
+    } else {
+      if (!activeCourseId) {
+        alert('Please select a course first')
+        return
+      }
+      availableQuestions = courseMCQList
+      if (test.categoryIds.length > 0) {
+        availableQuestions = courseMCQList.filter(q => test.categoryIds.includes(q.categoryId || ''))
+      }
     }
     
     if (availableQuestions.length === 0) {
-      alert('No questions available')
+      alert('No questions available. Please add MCQs first.')
+      return
+    }
+    
+    const liveTest: PersonalLiveTest = {
+      id: uuidv4(),
+      courseId: activeCourseId || 'library',
+      userId: user.id,
+      title: test.title,
+      categoryIds: test.categoryIds,
+      questionCount: Math.min(test.questionCount, availableQuestions.length),
+      duration: test.duration,
+      status: 'scheduled',
+      showSolution: test.showSolution,
+      createdAt: Date.now(),
+      scheduledAt: test.startTime,
+      source: test.source,
+      librarySubjectId: test.librarySubjectId,
+      libraryTopicId: test.libraryTopicId,
+      librarySubtopicId: test.librarySubtopicId,
+      resultReleaseTime: test.endTimeStr, // End Time = Result Release Time
+      difficulty: test.difficulty,
+    }
+    
+    addLiveTest(liveTest)
+    console.log('✅ Live Test created:', liveTest)
+    alert('Live Test created successfully!')
+  }
+  
+  // Handle save auto config from shared component (creates NEW config or updates existing)
+  const [editingAutoConfigId, setEditingAutoConfigId] = useState<string | null>(null)
+  
+  const handleSaveAutoConfigFromShared = (config: Omit<AutoTestConfig, 'id' | 'createdAt' | 'updatedAt'>) => {
+    if (!activeCourseId || !user) return
+    
+    // Check if using library source - no need to check course MCQs
+    const isLibrarySource = config.source === 'library'
+    
+    if (config.enabled && !isLibrarySource && config.categoryIds.length === 0 && courseMCQList.length === 0) {
+      alert('Please add MCQs to your course first or select categories')
+      return
+    }
+    
+    if (config.enabled && isLibrarySource && !config.librarySubjectId) {
+      alert('Please select a subject from Asset Library')
+      return
+    }
+    
+    // Generate unique ID for new config, or use existing if editing
+    const configId = editingAutoConfigId || `auto-${activeCourseId}-${Date.now()}`
+    
+    // Firebase doesn't support undefined values - use empty string instead
+    const fullConfig: PersonalAutoLiveTestConfig = {
+      id: configId,
+      courseId: activeCourseId,
+      userId: user.id,
+      enabled: config.enabled,
+      title: config.title,
+      categoryIds: config.categoryIds || [],
+      startTime: config.startTime,
+      endTime: config.endTime,
+      duration: config.duration,
+      questionCount: config.questionCount,
+      activeDays: config.activeDays,
+      showSolution: config.showSolution,
+      resultReleaseTime: config.resultReleaseTime || '',
+      showLeaderboard: config.showLeaderboard ?? true,
+      showDetailedAnalysis: config.showDetailedAnalysis ?? true,
+      source: config.source || 'course',
+      librarySubjectId: config.librarySubjectId || '',
+      libraryTopicId: config.libraryTopicId || '',
+      librarySubtopicId: config.librarySubtopicId || '',
+      difficulty: config.difficulty || 'all',
+      createdAt: editingAutoConfigId ? (currentAutoTestConfig?.createdAt || Date.now()) : Date.now(),
+      updatedAt: Date.now()
+    }
+    
+    if (editingAutoConfigId) {
+      // Update existing
+      setAutoLiveTestConfig(fullConfig)
+      alert('✅ Auto Test updated successfully!')
+    } else {
+      // Add new
+      addAutoLiveTestConfig(fullConfig)
+      alert('✅ New Auto Test added successfully!')
+    }
+    
+    // Reset editing state
+    setEditingAutoConfigId(null)
+  }
+  
+  // Handle delete auto config
+  const handleDeleteAutoConfig = (configId: string) => {
+    if (confirm('Are you sure you want to delete this auto test?')) {
+      removeAutoLiveTestConfig(configId)
+      alert('Auto test deleted!')
+    }
+  }
+  
+  // Handle save GLOBAL Auto Test config (creates NEW auto test)
+  const handleSaveGlobalAutoConfig = async () => {
+    if (!user) return
+    
+    if (globalAutoTestEnabled && !globalAutoTestSubject) {
+      alert('Please select a subject from Asset Library')
+      return
+    }
+    
+    // Generate unique ID for new auto test
+    const uniqueId = `global-auto-${Date.now()}`
+    
+    // Build config object without undefined values (Firebase doesn't support undefined)
+    const fullConfig: PersonalAutoLiveTestConfig = {
+      id: uniqueId,
+      courseId: 'global', // Special value for global config
+      userId: user.id,
+      enabled: globalAutoTestEnabled,
+      title: globalAutoTestTitle,
+      categoryIds: [],
+      startTime: globalAutoTestStartTime,
+      endTime: globalAutoTestEndTime,
+      duration: parseInt(globalAutoTestDuration),
+      questionCount: parseInt(globalAutoTestQuestionCount),
+      activeDays: globalAutoTestDays,
+      showSolution: globalAutoTestShowSolution,
+      resultReleaseTime: globalAutoTestResultReleaseTime,
+      showLeaderboard: globalAutoTestShowLeaderboard,
+      showDetailedAnalysis: true,
+      source: 'library',
+      librarySubjectId: globalAutoTestSubject || '', // Empty string instead of undefined
+      libraryTopicId: globalAutoTestTopic || '', // Empty string instead of undefined
+      librarySubtopicId: globalAutoTestSubtopic || '', // Empty string instead of undefined
+      difficulty: globalAutoTestDifficulty || 'all',
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    }
+    
+    try {
+      await addAutoLiveTestConfig(fullConfig)
+      alert('✅ New Auto Test Created!')
+      
+      // Reset form for new entry
+      setGlobalAutoTestEnabled(false)
+      setGlobalAutoTestTitle('Daily Practice Test')
+      setGlobalAutoTestSubject('')
+      setGlobalAutoTestTopic('')
+      setGlobalAutoTestSubtopic('')
+    } catch (error) {
+      console.error('Error saving global auto test config:', error)
+      alert('❌ সেভ করতে সমস্যা হয়েছে। আবার চেষ্টা করুন।')
+    }
+  }
+  
+  // Delete Global Auto Test config
+  const handleDeleteGlobalAutoConfig = async (configId: string) => {
+    if (!confirm('এই Auto Test মুছে ফেলবেন?')) return
+    
+    try {
+      await removeAutoLiveTestConfig(configId)
+      alert('✅ Auto Test মুছে ফেলা হয়েছে!')
+    } catch (error) {
+      console.error('Error deleting auto test config:', error)
+    }
+  }
+  
+  // Start Global Auto Test (accepts config parameter)
+  const startGlobalAutoTest = (config?: PersonalAutoLiveTestConfig) => {
+    const testConfig = config || globalAutoTestConfig
+    if (!testConfig || !user) return
+    
+    // Get questions from Asset Library
+    let filteredAssets = allAssets.filter(a => a.type === 'mcq')
+    
+    if (testConfig.librarySubjectId) {
+      filteredAssets = filteredAssets.filter(a => a.subjectId === testConfig.librarySubjectId)
+    }
+    if (testConfig.libraryTopicId) {
+      filteredAssets = filteredAssets.filter(a => a.topicId === testConfig.libraryTopicId)
+    }
+    if (testConfig.librarySubtopicId) {
+      filteredAssets = filteredAssets.filter(a => a.subtopicId === testConfig.librarySubtopicId)
+    }
+    
+    // Flatten quizQuestions from assets
+    const availableQuestions: any[] = []
+    filteredAssets.forEach(asset => {
+      if (asset.type === 'mcq' && 'quizQuestions' in asset) {
+        const mcqAsset = asset as any
+        mcqAsset.quizQuestions?.forEach((q: any) => {
+          // Filter by difficulty if specified
+          if (testConfig.difficulty && testConfig.difficulty !== 'all') {
+            if (q.difficulty !== testConfig.difficulty) return
+          }
+          availableQuestions.push({
+            id: q.id,
+            question: q.question || '',
+            options: q.options || [],
+            correctIndex: q.correctIndex ?? 0,
+            explanation: q.explanation || ''
+          })
+        })
+      }
+    })
+    
+    if (availableQuestions.length === 0) {
+      alert('No questions available for this test')
+      return
+    }
+    
+    // Create unique ID for this auto test run
+    const today = new Date()
+    const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+    const globalAutoTestId = `${testConfig.id}-${dateStr}`
+    
+    // Create a temporary test object
+    const globalAutoTest: PersonalLiveTest = {
+      id: globalAutoTestId,
+      courseId: 'global', // Special marker for global test
+      userId: user.id,
+      title: testConfig.title,
+      categoryIds: [],
+      questionCount: Math.min(testConfig.questionCount, availableQuestions.length),
+      duration: testConfig.duration,
+      status: 'active',
+      showSolution: testConfig.showSolution,
+      source: 'library',
+      librarySubjectId: testConfig.librarySubjectId,
+      libraryTopicId: testConfig.libraryTopicId,
+      librarySubtopicId: testConfig.librarySubtopicId,
+      resultReleaseTime: testConfig.resultReleaseTime,
+      startedAt: Date.now(),
+      createdAt: Date.now()
+    }
+    
+    // Shuffle and pick questions
+    const shuffled = [...availableQuestions].sort(() => Math.random() - 0.5)
+    const selectedQuestions = shuffled.slice(0, globalAutoTest.questionCount)
+    
+    setLiveTestQuestions(selectedQuestions)
+    setLiveTestCurrentQ(0)
+    setLiveTestAnswers({})
+    setLiveTestStartedAt(Date.now())
+    setRunningLiveTest(globalAutoTest)
+  }
+  
+  // Handle delete test from shared component
+  const handleDeleteTestFromShared = (testId: string) => {
+    if (confirm('Delete this test?')) {
+      removeLiveTest(testId)
+    }
+  }
+  
+  // Start Live Test (Manual or Auto)
+  const startLiveTest = (test: PersonalLiveTest) => {
+    let availableQuestions: any[] = []
+    
+    // Check if test is from Asset Library or Course
+    if (test.source === 'library') {
+      // Get questions from Asset Library
+      let filteredAssets = allAssets.filter(a => a.type === 'mcq')
+      
+      if (test.librarySubjectId) {
+        filteredAssets = filteredAssets.filter(a => a.subjectId === test.librarySubjectId)
+      }
+      if (test.libraryTopicId) {
+        filteredAssets = filteredAssets.filter(a => a.topicId === test.libraryTopicId)
+      }
+      if (test.librarySubtopicId) {
+        filteredAssets = filteredAssets.filter(a => a.subtopicId === test.librarySubtopicId)
+      }
+      
+      // Convert AssetMCQ to PersonalMCQ format - flatten quizQuestions
+      filteredAssets.forEach(asset => {
+        if (asset.type === 'mcq' && 'quizQuestions' in asset) {
+          const mcqAsset = asset as any
+          mcqAsset.quizQuestions?.forEach((q: any) => {
+            availableQuestions.push({
+              id: q.id || `${asset.id}-${Math.random()}`,
+              courseId: 'library',
+              categoryId: asset.topicId,
+              question: q.question || '',
+              options: q.options || [],
+              correctIndex: q.correctIndex || 0,
+              explanation: q.explanation,
+              createdAt: asset.createdAt,
+            })
+          })
+        }
+      })
+    } else {
+      // Get questions from Course MCQs
+      availableQuestions = courseMCQList
+      if (test.categoryIds.length > 0) {
+        availableQuestions = courseMCQList.filter(q => test.categoryIds.includes(q.categoryId || ''))
+      }
+    }
+    
+    // Filter by difficulty if specified (only if not 'all')
+    if (test.difficulty && test.difficulty !== 'all') {
+      availableQuestions = availableQuestions.filter(q => {
+        // If question has no difficulty set, treat it as 'medium' (default)
+        const questionDifficulty = q.difficulty || 'medium'
+        return questionDifficulty === test.difficulty
+      })
+    }
+    
+    if (availableQuestions.length === 0) {
+      alert('No questions available for the selected difficulty level')
       return
     }
     
@@ -606,32 +1204,94 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
     updateLiveTest({ ...test, status: 'active', startedAt: Date.now() })
   }
   
-  // Start Auto Test
+  // Start Auto Test (old function - for backward compatibility)
   const startAutoTest = () => {
-    if (!currentAutoTestConfig || !activeCourseId || !user) return
+    if (!currentAutoTestConfig) return
+    startAutoTestWithConfig(currentAutoTestConfig)
+  }
+  
+  // Start Auto Test with specific config
+  const startAutoTestWithConfig = (config: PersonalAutoLiveTestConfig) => {
+    if (!activeCourseId || !user) return
     
-    // Get questions
-    let availableQuestions = courseMCQList
-    if (currentAutoTestConfig.categoryIds.length > 0) {
-      availableQuestions = courseMCQList.filter(q => currentAutoTestConfig.categoryIds.includes(q.categoryId || ''))
+    let availableQuestions: any[] = []
+    
+    // Check if using Library source
+    if (config.source === 'library') {
+      // Get questions from Asset Library
+      let filteredAssets = allAssets.filter(a => a.type === 'mcq')
+      
+      if (config.librarySubjectId) {
+        filteredAssets = filteredAssets.filter(a => a.subjectId === config.librarySubjectId)
+      }
+      if (config.libraryTopicId) {
+        filteredAssets = filteredAssets.filter(a => a.topicId === config.libraryTopicId)
+      }
+      if (config.librarySubtopicId) {
+        filteredAssets = filteredAssets.filter(a => a.subtopicId === config.librarySubtopicId)
+      }
+      
+      // Convert AssetMCQ to PersonalMCQ format - flatten quizQuestions
+      filteredAssets.forEach(asset => {
+        if (asset.type === 'mcq' && 'quizQuestions' in asset) {
+          const mcqAsset = asset as any
+          mcqAsset.quizQuestions?.forEach((q: any) => {
+            availableQuestions.push({
+              id: q.id || `${asset.id}-${Math.random()}`,
+              courseId: 'library',
+              categoryId: asset.topicId,
+              question: q.question || '',
+              options: q.options || [],
+              correctIndex: q.correctIndex || 0,
+              explanation: q.explanation,
+              createdAt: asset.createdAt,
+            })
+          })
+        }
+      })
+    } else {
+      // Get questions from Course MCQs
+      availableQuestions = [...courseMCQList]
+      if (config.categoryIds.length > 0) {
+        availableQuestions = courseMCQList.filter(q => config.categoryIds.includes(q.categoryId || ''))
+      }
+    }
+    
+    // Filter by difficulty if specified (only if not 'all')
+    if (config.difficulty && config.difficulty !== 'all') {
+      availableQuestions = availableQuestions.filter(q => {
+        // If question has no difficulty set, treat it as 'medium' (default)
+        const questionDifficulty = q.difficulty || 'medium'
+        return questionDifficulty === config.difficulty
+      })
     }
     
     if (availableQuestions.length === 0) {
-      alert('No questions available')
+      alert('No questions available for the selected difficulty level')
       return
     }
     
+    // Create unique ID for today's auto test with config id
+    const today = new Date()
+    const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+    const autoTestId = `${config.id}-${dateStr}`
+    
     // Create a temporary test
     const autoTest: PersonalLiveTest = {
-      id: `auto-${Date.now()}`,
+      id: autoTestId,
       courseId: activeCourseId,
       userId: user.id,
-      title: currentAutoTestConfig.title,
-      categoryIds: currentAutoTestConfig.categoryIds,
-      questionCount: Math.min(currentAutoTestConfig.questionCount, availableQuestions.length),
-      duration: currentAutoTestConfig.duration,
+      title: config.title,
+      categoryIds: config.categoryIds,
+      questionCount: Math.min(config.questionCount, availableQuestions.length),
+      duration: config.duration,
       status: 'active',
-      showSolution: currentAutoTestConfig.showSolution,
+      showSolution: config.showSolution,
+      source: config.source,
+      librarySubjectId: config.librarySubjectId,
+      libraryTopicId: config.libraryTopicId,
+      librarySubtopicId: config.librarySubtopicId,
+      resultReleaseTime: config.resultReleaseTime,
       startedAt: Date.now(),
       createdAt: Date.now()
     }
@@ -649,7 +1309,10 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
   
   // Submit Live Test
   const submitLiveTest = () => {
-    if (!runningLiveTest || !user || !activeCourseId) return
+    if (!runningLiveTest || !user) return
+    // For global tests, courseId is 'global', for regular tests we need activeCourseId
+    const testCourseId = runningLiveTest.courseId === 'global' ? 'global' : activeCourseId
+    if (!testCourseId) return
     
     const timeTaken = Math.round((Date.now() - liveTestStartedAt) / 1000)
     
@@ -674,7 +1337,7 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
     const result: PersonalLiveTestResult = {
       id: uuidv4(),
       testId: runningLiveTest.id,
-      courseId: activeCourseId,
+      courseId: testCourseId,
       userId: user.id,
       score,
       correct,
@@ -693,7 +1356,22 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
       updateLiveTest({ ...runningLiveTest, status: 'completed', endedAt: Date.now() })
     }
     
-    setViewingLiveTestResult(result)
+    // Store questions for viewing solutions later
+    setSolutionsQuestions([...liveTestQuestions])
+    
+    // Get result release time from the running test itself
+    const releaseTime = runningLiveTest.resultReleaseTime
+    const isReleased = isResultReleased(releaseTime)
+    
+    if (!isReleased && releaseTime) {
+      alert(`✅ Test submitted successfully!\n\n⏰ Result will be available at ${getResultReleaseMessage(releaseTime)}`)
+      // Don't show result yet - just go to results tab
+      setViewingLiveTestResult(null)
+    } else {
+      // Show result immediately if no release time or release time has passed
+      setViewingLiveTestResult(result)
+    }
+    
     setRunningLiveTest(null)
     setLiveTestQuestions([])
     setLiveTestTab('results')
@@ -709,6 +1387,42 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
     const minutes = Math.floor(remaining / 60000)
     const seconds = Math.floor((remaining % 60000) / 1000)
     return `${minutes}:${String(seconds).padStart(2, '0')}`
+  }
+
+  // Check if result is released based on resultReleaseTime and test submission date
+  const isResultReleased = (resultReleaseTime?: string, submittedAt?: number): boolean => {
+    if (!resultReleaseTime) return true // If no release time set, show result immediately
+    
+    const now = new Date()
+    
+    // If submittedAt is provided, check if it's from a previous day
+    if (submittedAt) {
+      const submissionDate = new Date(submittedAt)
+      const today = new Date()
+      today.setHours(0, 0, 0, 0)
+      submissionDate.setHours(0, 0, 0, 0)
+      
+      // If test was submitted on a previous day, result is always available
+      if (submissionDate < today) {
+        return true
+      }
+    }
+    
+    // For today's tests, check if current time is past release time
+    const [hours, minutes] = resultReleaseTime.split(':').map(Number)
+    const releaseTime = new Date()
+    releaseTime.setHours(hours, minutes, 0, 0)
+    
+    return now >= releaseTime
+  }
+
+  // Get result release time display
+  const getResultReleaseMessage = (resultReleaseTime?: string): string => {
+    if (!resultReleaseTime) return ''
+    const [hours, minutes] = resultReleaseTime.split(':').map(Number)
+    const period = hours >= 12 ? 'PM' : 'AM'
+    const displayHours = hours > 12 ? hours - 12 : hours === 0 ? 12 : hours
+    return `${displayHours}:${String(minutes).padStart(2, '0')} ${period}`
   }
 
   // Rich text modules
@@ -740,6 +1454,7 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
           }))}
           testTitle={runningQuiz.title}
           onFinish={(result) => {
+            // Save quiz result (don't close - let TestRunner show result screen)
             if (user && activeCourseId) {
               addQuizResult({
                 id: uuidv4(),
@@ -757,7 +1472,7 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
                 createdAt: Date.now(),
               })
             }
-            setRunningQuiz(null)
+            // Don't setRunningQuiz(null) here - TestRunner shows result internally
           }}
           onBack={() => setRunningQuiz(null)}
         />
@@ -769,12 +1484,22 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
   // Render: Live Test Running
   // ===============================
   if (runningLiveTest && liveTestQuestions.length > 0) {
+    const answeredCount = Object.keys(liveTestAnswers).length
+    
     return (
       <div className="p-4 md:p-6 max-w-4xl mx-auto pb-20 lg:pb-6">
         <Card className="p-3 sm:p-6">
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-3 sm:mb-4">
-            <div className="flex items-center gap-2 sm:gap-4 text-sm">
+          <div className="flex justify-between items-center gap-2 mb-3 sm:mb-4">
+            <div className="flex items-center gap-3 text-sm">
               <span className="font-medium">Q {liveTestCurrentQ + 1}/{liveTestQuestions.length}</span>
+              <button
+                onClick={() => setShowQuestionNav(!showQuestionNav)}
+                className="flex items-center gap-1.5 px-2 py-1 bg-muted rounded-md text-xs hover:bg-muted/80 transition-colors"
+              >
+                <Grid3X3 className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Questions</span>
+                <span className="text-green-600 font-medium">{answeredCount}/{liveTestQuestions.length}</span>
+              </button>
               <span className="text-red-500 font-medium">
                 <Clock className="h-3.5 w-3.5 inline mr-1" />
                 {formatTimeRemaining(liveTestStartedAt, runningLiveTest.duration)}
@@ -785,24 +1510,43 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
             </Button>
           </div>
           
-          {/* Question Navigator */}
-          <div className="flex flex-wrap gap-1.5 sm:gap-2 mb-3 sm:mb-4 p-2 sm:p-3 bg-muted/50 rounded overflow-x-auto">
-            {liveTestQuestions.map((_, i) => (
-              <button
-                key={i}
-                onClick={() => setLiveTestCurrentQ(i)}
-                className={`min-w-[28px] w-7 h-7 sm:w-8 sm:h-8 rounded text-xs sm:text-sm font-medium transition-colors ${
-                  liveTestCurrentQ === i 
-                    ? 'bg-primary text-primary-foreground' 
-                    : liveTestAnswers[liveTestQuestions[i].id] !== undefined
-                      ? 'bg-green-500 text-white'
-                      : 'bg-background border'
-                }`}
-              >
-                {i + 1}
-              </button>
-            ))}
-          </div>
+          {/* Collapsible Question Navigator */}
+          {showQuestionNav && (
+            <motion.div 
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              className="mb-3 sm:mb-4 p-3 bg-muted/50 rounded-lg border"
+            >
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-xs text-muted-foreground">Tap to jump to question</span>
+                <button onClick={() => setShowQuestionNav(false)} className="text-muted-foreground hover:text-foreground">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-1.5 sm:gap-2">
+                {liveTestQuestions.map((_, i) => (
+                  <button
+                    key={i}
+                    onClick={() => { setLiveTestCurrentQ(i); setShowQuestionNav(false); }}
+                    className={`min-w-[32px] w-8 h-8 rounded text-xs font-medium transition-colors ${
+                      liveTestCurrentQ === i 
+                        ? 'bg-primary text-primary-foreground' 
+                        : liveTestAnswers[liveTestQuestions[i].id] !== undefined
+                          ? 'bg-green-500 text-white'
+                          : 'bg-background border hover:bg-muted'
+                    }`}
+                  >
+                    {i + 1}
+                  </button>
+                ))}
+              </div>
+              <div className="flex gap-4 mt-3 text-xs text-muted-foreground">
+                <span className="flex items-center gap-1"><span className="w-3 h-3 bg-green-500 rounded"></span> Answered</span>
+                <span className="flex items-center gap-1"><span className="w-3 h-3 bg-background border rounded"></span> Unanswered</span>
+              </div>
+            </motion.div>
+          )}
           
           <h3 className="text-base sm:text-lg font-medium mb-3 sm:mb-4">{liveTestQuestions[liveTestCurrentQ]?.question}</h3>
           <div className="space-y-2">
@@ -863,7 +1607,8 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
           
           <div className="space-y-4 sm:space-y-6">
             {viewingLiveTestResult.answers.map((ans, idx) => {
-              const question = courseMCQs.find(q => q.id === ans.questionId)
+              // Try to find question in solutionsQuestions first, then courseMCQs
+              const question = solutionsQuestions.find(q => q.id === ans.questionId) || courseMCQs.find(q => q.id === ans.questionId)
               if (!question) return null
               
               const isCorrect = ans.selected === ans.correct
@@ -1041,8 +1786,31 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
           <TabsContent value="live-test" className="mt-4 space-y-6">
             <div>
               <h1 className="text-2xl font-bold">Live Tests</h1>
-              <p className="text-muted-foreground">Practice with timed tests</p>
+              <p className="text-muted-foreground">Practice with timed tests from Asset Library</p>
             </div>
+            
+            {/* Info: Create Auto Test from Settings */}
+            <Card className="border-dashed border-2 border-primary/30 bg-primary/5">
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-semibold flex items-center gap-2">
+                      <Clock className="h-4 w-4" /> Auto Daily Test
+                    </h4>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Set up auto daily tests from Settings tab (Course or Asset Library)
+                    </p>
+                  </div>
+                  <Button 
+                    size="sm" 
+                    variant="outline"
+                    onClick={() => setActiveSubTab('settings')}
+                  >
+                    <Settings className="h-4 w-4 mr-1" /> Settings
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
             
             {/* Sub-tabs for Live Test */}
             <div className="flex gap-2 flex-wrap">
@@ -1071,15 +1839,40 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
 
             {/* Upcoming Tests */}
             {liveTestTab === 'upcoming' && (
-              <Card className="p-8 text-center">
-                <Clock className="h-12 w-12 mx-auto text-muted-foreground/30 mb-4" />
-                <h3 className="text-lg font-semibold mb-2">No Upcoming Tests</h3>
-                <p className="text-muted-foreground">
-                  {courses.length === 0 
-                    ? "Create a course first to schedule tests" 
-                    : "Select a course to view and schedule tests"}
-                </p>
-              </Card>
+              <div className="space-y-4">
+                {courseLiveTests.filter(t => t.status === 'scheduled').length === 0 ? (
+                  <Card className="p-8 text-center">
+                    <Clock className="h-12 w-12 mx-auto text-muted-foreground/30 mb-4" />
+                    <h3 className="text-lg font-semibold mb-2">No Upcoming Tests</h3>
+                    <p className="text-muted-foreground mb-4">
+                      Create a test from Asset Library in Settings tab
+                    </p>
+                    <Button onClick={() => setActiveSubTab('settings')}>
+                      <Settings className="h-4 w-4 mr-2" /> Go to Settings
+                    </Button>
+                  </Card>
+                ) : (
+                  courseLiveTests.filter(t => t.status === 'scheduled').map(test => (
+                    <Card key={test.id} className="p-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h3 className="font-semibold">{test.title}</h3>
+                          <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
+                            <span><Target className="h-4 w-4 inline mr-1" /> {test.questionCount} questions</span>
+                            <span><Clock className="h-4 w-4 inline mr-1" /> {test.duration} min</span>
+                            {test.source === 'library' && (
+                              <span className="text-primary"><Library className="h-4 w-4 inline mr-1" /> Library</span>
+                            )}
+                          </div>
+                        </div>
+                        <Button onClick={() => startLiveTest(test)}>
+                          <Play className="h-4 w-4 mr-2" /> Start
+                        </Button>
+                      </div>
+                    </Card>
+                  ))
+                )}
+              </div>
             )}
 
             {/* Past Tests */}
@@ -1136,21 +1929,196 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
               </div>
             </Card>
 
-            {/* Live Test Management - Placeholder */}
+            {/* Live Test Management from Asset Library */}
             <Card className="p-6">
               <h3 className="font-semibold mb-4 flex items-center gap-2">
                 <Brain className="h-5 w-5" /> Live Test Management
               </h3>
-              <p className="text-sm text-muted-foreground mb-4">
-                {courses.length === 0 
-                  ? "Create a course first to manage live tests and auto-scheduling."
-                  : "Select a course to manage live tests and enable auto-scheduling."}
-              </p>
-              {courses.length === 0 && (
-                <Button onClick={() => { setActiveSubTab('course'); setShowCreateCourse(true); }}>
-                  <Plus className="h-4 w-4 mr-2" /> Create Course
-                </Button>
+              
+              {showCreateLiveTest ? (
+                <div className="space-y-4">
+                  <div className="flex justify-between items-center">
+                    <h4 className="font-medium">Create New Test from Asset Library</h4>
+                    <Button variant="ghost" size="sm" onClick={() => setShowCreateLiveTest(false)}>
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  
+                  <div>
+                    <label className="text-sm font-medium">Test Title *</label>
+                    <Input 
+                      placeholder="e.g., Practice Test #1"
+                      value={newLiveTestTitle}
+                      onChange={e => setNewLiveTestTitle(e.target.value)}
+                    />
+                  </div>
+
+                  {/* Asset Library Selection */}
+                  <div className="space-y-3 p-3 bg-primary/5 rounded-lg border border-primary/20">
+                    <div>
+                      <label className="text-sm font-medium">Subject *</label>
+                      <Select 
+                        value={liveTestLibrarySubject} 
+                        onValueChange={(v) => {
+                          setLiveTestLibrarySubject(v)
+                          setLiveTestLibraryTopic('')
+                          setLiveTestLibrarySubtopic('')
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select Subject" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {assetSubjects.map(sub => (
+                            <SelectItem key={sub.id} value={sub.id}>{sub.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    
+                    {liveTestLibrarySubject && (
+                      <div>
+                        <label className="text-sm font-medium">Topic (optional)</label>
+                        <Select 
+                          value={liveTestLibraryTopic} 
+                          onValueChange={(v) => {
+                            setLiveTestLibraryTopic(v)
+                            setLiveTestLibrarySubtopic('')
+                          }}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="All Topics" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="">All Topics</SelectItem>
+                            {libraryTopicsForSubject.map(topic => (
+                              <SelectItem key={topic.id} value={topic.id}>{topic.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                    
+                    {liveTestLibraryTopic && librarySubtopicsForTopic.length > 0 && (
+                      <div>
+                        <label className="text-sm font-medium">Sub-topic (optional)</label>
+                        <Select value={liveTestLibrarySubtopic} onValueChange={setLiveTestLibrarySubtopic}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="All Sub-topics" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="">All Sub-topics</SelectItem>
+                            {librarySubtopicsForTopic.map(st => (
+                              <SelectItem key={st.id} value={st.id}>{st.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                    
+                    <div className="text-sm text-muted-foreground bg-background p-2 rounded">
+                      📊 Available: <strong>{libraryMCQs.length}</strong> MCQs
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-sm font-medium">Duration</label>
+                      <Select value={newLiveTestDuration} onValueChange={setNewLiveTestDuration}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="15">15 min</SelectItem>
+                          <SelectItem value="30">30 min</SelectItem>
+                          <SelectItem value="45">45 min</SelectItem>
+                          <SelectItem value="60">60 min</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium">Questions</label>
+                      <Select value={newLiveTestQuestionCount} onValueChange={setNewLiveTestQuestionCount}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="10">10</SelectItem>
+                          <SelectItem value="20">20</SelectItem>
+                          <SelectItem value="30">30</SelectItem>
+                          <SelectItem value="50">50</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
+                  <Button 
+                    onClick={() => {
+                      setLiveTestSource('library')
+                      handleCreateLiveTest()
+                    }} 
+                    className="w-full"
+                    disabled={!liveTestLibrarySubject || libraryMCQs.length === 0}
+                  >
+                    <Plus className="h-4 w-4 mr-2" /> Create Test
+                  </Button>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <p className="text-sm text-muted-foreground">
+                    Create tests directly from your Asset Library MCQs.
+                  </p>
+                  <Button onClick={() => setShowCreateLiveTest(true)} className="w-full">
+                    <Plus className="h-4 w-4 mr-2" /> Create Test from Library
+                  </Button>
+                  
+                  {/* Show scheduled tests */}
+                  {courseLiveTests.filter(t => t.status === 'scheduled').length > 0 && (
+                    <div className="space-y-2 mt-4">
+                      <h4 className="text-sm font-medium text-muted-foreground">Scheduled Tests</h4>
+                      {courseLiveTests.filter(t => t.status === 'scheduled').map(test => (
+                        <div key={test.id} className="flex items-center justify-between p-3 border rounded">
+                          <div>
+                            <p className="font-medium">{test.title}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {test.questionCount} questions • {test.duration} min
+                            </p>
+                          </div>
+                          <Button 
+                            variant="ghost" 
+                            size="sm"
+                            onClick={() => removeLiveTest(test.id)}
+                          >
+                            <Trash2 className="h-4 w-4 text-red-500" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               )}
+            </Card>
+
+
+
+            {/* Haptic Feedback */}
+            <Card className="p-6">
+              <h3 className="font-semibold mb-4 flex items-center gap-2">
+                <Vibrate className="h-5 w-5" /> হ্যাপটিক ফিডব্যাক
+              </h3>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium">ভাইব্রেশন চালু করুন</p>
+                  <p className="text-xs text-muted-foreground">বাটন প্রেসে ভাইব্রেশন অনুভব করুন</p>
+                </div>
+                <Switch
+                  checked={hapticEnabled}
+                  onCheckedChange={(checked) => {
+                    setHapticEnabled(checked)
+                    if (checked) triggerHaptic()
+                  }}
+                />
+              </div>
             </Card>
           </TabsContent>
         </Tabs>
@@ -1432,7 +2400,8 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
                     {/* Chapter Content */}
                     {isExpanded && (
                       <div className="border-t bg-muted/30 p-3 space-y-2">
-                        {topicContent.map(item => (
+                        {/* Only show non-quiz content items (notes, pdfs, links, etc.) */}
+                        {topicContent.filter(item => item.type !== 'quiz').map(item => (
                           <div 
                             key={item.id}
                             className="flex items-center gap-2 p-2 bg-background rounded border cursor-pointer hover:border-primary"
@@ -1488,44 +2457,19 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
                           </div>
                         )}
 
-                        {/* MCQ List */}
-                        {topicMCQs.length > 0 && (
-                          <div className="mt-3 pt-3 border-t">
-                            <p className="text-xs font-medium text-muted-foreground mb-2">MCQs ({topicMCQs.length})</p>
-                            <div className="space-y-1">
-                              {topicMCQs.map((mcq, idx) => (
-                                <div 
-                                  key={mcq.id}
-                                  className="flex items-center gap-2 p-2 bg-background rounded border hover:border-primary text-sm"
-                                >
-                                  <HelpCircle className="h-4 w-4 text-blue-500 flex-shrink-0" />
-                                  <span className="flex-1 truncate">{idx + 1}. {mcq.question.replace(/<[^>]*>/g, '').substring(0, 60)}...</span>
-                                  {mcq.assetRef && <span className="text-xs text-green-500" title="Synced with Library">🔗</span>}
-                                  {isEditMode && (
-                                    <DropdownMenu>
-                                      <DropdownMenuTrigger asChild onClick={e => e.stopPropagation()}>
-                                        <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
-                                          <MoreVertical className="h-3 w-3" />
-                                        </Button>
-                                      </DropdownMenuTrigger>
-                                      <DropdownMenuContent>
-                                        <DropdownMenuItem onClick={() => handleEditMcq(mcq)}>
-                                          <Pencil className="h-4 w-4 mr-2" /> Edit
-                                        </DropdownMenuItem>
-                                        <DropdownMenuItem 
-                                          className="text-destructive"
-                                          onClick={() => {
-                                            if (confirm('Delete this MCQ?')) removeCourseMCQ(mcq.id)
-                                          }}
-                                        >
-                                          <Trash2 className="h-4 w-4 mr-2" /> Delete
-                                        </DropdownMenuItem>
-                                      </DropdownMenuContent>
-                                    </DropdownMenu>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
+                        {/* MCQ Count Info (not individual questions) */}
+                        {topicMCQs.length > 0 && !isEditMode && (
+                          <div className="mt-3 pt-3 border-t flex items-center justify-between">
+                            <p className="text-sm text-muted-foreground">
+                              📝 {topicMCQs.length} MCQs available
+                            </p>
+                            <Button 
+                              size="sm" 
+                              variant="outline"
+                              onClick={() => handleStartQuiz(topic.id)}
+                            >
+                              <Play className="h-3 w-3 mr-1" /> Start Quiz
+                            </Button>
                           </div>
                         )}
 
@@ -1562,34 +2506,110 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
 
         {/* Live Test Tab - Same as Group Study */}
         <TabsContent value="live-test" className="mt-4 space-y-4">
-          {/* Auto Daily Test Banner */}
-          {isAutoTestActive && currentAutoTestConfig && (
-            <Card className="border-2 border-green-500 bg-green-50 dark:bg-green-900/20">
-              <CardContent className="p-3 sm:p-4">
-                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-3">
-                  <div className="flex items-center gap-2 sm:gap-3">
-                    <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 bg-green-500 rounded-full animate-pulse" />
-                    <div>
-                      <h4 className="font-semibold text-sm sm:text-base text-green-700 dark:text-green-400">
-                        {currentAutoTestConfig.title}
-                      </h4>
-                      <p className="text-xs sm:text-sm text-muted-foreground">
-                        {currentAutoTestConfig.questionCount} Q • {currentAutoTestConfig.duration} min
-                      </p>
-                    </div>
+          {/* Auto Daily Test Banners - Show ALL enabled auto tests */}
+          {courseAutoTestConfigs.length > 0 && (
+            <div className="space-y-2">
+              {courseAutoTestConfigs.map(config => {
+                // Check if this specific config is active now
+                const now = new Date()
+                const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+                const isConfigActive = config.enabled && currentTime >= config.startTime && currentTime <= config.endTime
+                
+                // Check if user has completed this specific config today
+                const today = new Date()
+                const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+                const hasCompletedConfig = liveTestResults.some(r => r.testId === `${config.id}-${dateStr}`)
+                
+                return (
+                  <Card key={config.id} className={`border-2 ${
+                    hasCompletedConfig 
+                      ? 'border-green-500 bg-green-50 dark:bg-green-900/20'
+                      : isConfigActive 
+                        ? 'border-red-500 bg-red-50 dark:bg-red-900/20' 
+                        : 'border-yellow-500 bg-yellow-50 dark:bg-yellow-900/20'
+                  }`}>
+                    <CardContent className="p-3 sm:p-4">
+                      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-3">
+                        <div className="flex items-center gap-2 sm:gap-3">
+                          {hasCompletedConfig ? (
+                            <span className="text-green-600 dark:text-green-400 font-bold text-sm">
+                              ✅ Done
+                            </span>
+                          ) : isConfigActive ? (
+                            <span className="text-red-600 dark:text-red-400 font-bold text-sm animate-pulse">
+                              🔴 LIVE
+                            </span>
+                          ) : (
+                            <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-yellow-500" />
+                          )}
+                          <div>
+                            <h4 className={`font-semibold text-sm sm:text-base ${
+                              hasCompletedConfig
+                                ? 'text-green-700 dark:text-green-400'
+                                : isConfigActive 
+                                  ? 'text-red-700 dark:text-red-400' 
+                                  : 'text-yellow-700 dark:text-yellow-400'
+                            }`}>
+                              {config.title}
+                            </h4>
+                            <p className="text-xs sm:text-sm text-muted-foreground">
+                              {config.questionCount} Q • {config.duration} min
+                              {config.source === 'library' && ' • 📚 Library'}
+                            </p>
+                          </div>
+                        </div>
+                        {hasCompletedConfig ? (
+                          <span className="text-xs text-green-700 dark:text-green-400 font-medium">
+                            ✓ Today's test completed! Result at {config.resultReleaseTime || config.endTime}
+                          </span>
+                        ) : isConfigActive ? (
+                          <Button 
+                            size="sm"
+                            className="h-8 text-xs sm:text-sm w-full sm:w-auto bg-red-600 hover:bg-red-700"
+                            onClick={() => startAutoTestWithConfig(config)}
+                          >
+                            <Play className="h-4 w-4 mr-2" />
+                            Start Now!
+                          </Button>
+                        ) : (
+                          <span className="text-xs text-yellow-700 dark:text-yellow-400 font-medium">
+                            ⏰ Available: {config.startTime} - {config.endTime}
+                          </span>
+                        )}
+                      </div>
+                      {isConfigActive && (
+                        <p className="text-xs text-red-600/70 dark:text-red-400/70 mt-2">
+                          ⚡ Live now! Available until {config.endTime} today
+                        </p>
+                      )}
+                    </CardContent>
+                  </Card>
+                )
+              })}
+            </div>
+          )}
+
+          {/* Quick Create Test from Library */}
+          {!currentAutoTestConfig?.enabled && assetSubjects.length > 0 && (
+            <Card className="border-dashed border-2 border-primary/30 bg-primary/5">
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-semibold flex items-center gap-2">
+                      <Library className="h-4 w-4" /> Quick Test from Library
+                    </h4>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Create a test from Asset Library MCQs
+                    </p>
                   </div>
                   <Button 
-                    size="sm"
-                    className="h-8 text-xs sm:text-sm w-full sm:w-auto bg-green-600 hover:bg-green-700"
-                    onClick={startAutoTest}
+                    size="sm" 
+                    variant="outline"
+                    onClick={() => setActiveSubTab('settings')}
                   >
-                    <Play className="h-4 w-4 mr-2" />
-                    Start Daily Test
+                    <Plus className="h-4 w-4 mr-1" /> Create
                   </Button>
                 </div>
-                <p className="text-xs text-muted-foreground mt-2">
-                  Available until {currentAutoTestConfig.endTime} today
-                </p>
               </CardContent>
             </Card>
           )}
@@ -1661,6 +2681,10 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
               ) : (
                 courseLiveTests.filter(t => t.status === 'completed').map(test => {
                   const myResult = liveTestResults.find(r => r.testId === test.id)
+                  // For scheduled tests, use resultReleaseTime
+                  const releaseTime = test.resultReleaseTime
+                  const resultAvailable = isResultReleased(releaseTime, myResult?.submittedAt)
+                  
                   return (
                     <Card key={test.id} className="p-4">
                       <div className="flex items-start justify-between">
@@ -1672,16 +2696,23 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
                         </div>
                         <div className="text-right">
                           {myResult ? (
-                            <div className={`text-2xl font-bold ${myResult.score >= 80 ? 'text-green-500' : myResult.score >= 50 ? 'text-yellow-500' : 'text-red-500'}`}>
-                              {myResult.score}%
-                            </div>
+                            resultAvailable ? (
+                              <div className={`text-2xl font-bold ${myResult.score >= 80 ? 'text-green-500' : myResult.score >= 50 ? 'text-yellow-500' : 'text-red-500'}`}>
+                                {myResult.score}%
+                              </div>
+                            ) : (
+                              <div className="text-sm text-orange-500 flex items-center gap-1">
+                                <Clock className="h-4 w-4" />
+                                Result at {getResultReleaseMessage(releaseTime)}
+                              </div>
+                            )
                           ) : (
                             <span className="text-sm text-muted-foreground">Not attempted</span>
                           )}
                         </div>
                       </div>
                       
-                      {myResult && test.showSolution && (
+                      {myResult && test.showSolution && resultAvailable && (
                         <div className="flex gap-2 mt-3">
                           <Button 
                             size="sm" 
@@ -1693,6 +2724,13 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
                           >
                             <Eye className="h-4 w-4 mr-1" /> View Solutions
                           </Button>
+                        </div>
+                      )}
+                      
+                      {myResult && !resultAvailable && (
+                        <div className="mt-3 p-2 bg-orange-50 dark:bg-orange-900/20 rounded text-sm text-orange-600 dark:text-orange-400 flex items-center gap-2">
+                          <Clock className="h-4 w-4" />
+                          Test submitted! Result will be available at {getResultReleaseMessage(releaseTime)}
                         </div>
                       )}
                     </Card>
@@ -1707,40 +2745,26 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
             <div className="space-y-4">
               {viewingLiveTestResult ? (
                 <Card className="p-4">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="font-semibold">Test Result</h3>
-                    <Button variant="outline" size="sm" onClick={() => setViewingLiveTestResult(null)}>
-                      <X className="h-4 w-4 mr-1" /> Close
-                    </Button>
-                  </div>
-                  
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-                    <div className="text-center p-3 bg-muted rounded">
-                      <div className={`text-2xl font-bold ${viewingLiveTestResult.score >= 80 ? 'text-green-500' : viewingLiveTestResult.score >= 50 ? 'text-yellow-500' : 'text-red-500'}`}>
-                        {viewingLiveTestResult.score}%
-                      </div>
-                      <p className="text-xs text-muted-foreground">Score</p>
-                    </div>
-                    <div className="text-center p-3 bg-muted rounded">
-                      <div className="text-2xl font-bold text-green-500">{viewingLiveTestResult.correct}</div>
-                      <p className="text-xs text-muted-foreground">Correct</p>
-                    </div>
-                    <div className="text-center p-3 bg-muted rounded">
-                      <div className="text-2xl font-bold text-red-500">{viewingLiveTestResult.wrong}</div>
-                      <p className="text-xs text-muted-foreground">Wrong</p>
-                    </div>
-                    <div className="text-center p-3 bg-muted rounded">
-                      <div className="text-2xl font-bold">{Math.floor(viewingLiveTestResult.timeTaken / 60)}:{String(viewingLiveTestResult.timeTaken % 60).padStart(2, '0')}</div>
-                      <p className="text-xs text-muted-foreground">Time</p>
-                    </div>
-                  </div>
-                  
-                  <Button 
-                    onClick={() => setViewingLiveTestSolutions(true)} 
-                    className="w-full"
-                  >
-                    <Eye className="h-4 w-4 mr-2" /> View Solutions
-                  </Button>
+                  <ResultAnalysis
+                    result={{
+                      ...viewingLiveTestResult,
+                      answers: viewingLiveTestResult.answers.map(ans => {
+                        const mcq = courseMCQList.find(m => m.id === ans.questionId)
+                        return {
+                          ...ans,
+                          categoryId: mcq?.categoryId,
+                          categoryName: courseTopics.find(t => t.id === mcq?.categoryId)?.name
+                        }
+                      })
+                    }}
+                    categories={courseTopics.map(t => ({ id: t.id, name: t.name }))}
+                    showLeaderboard={false}
+                    showCategoryBreakdown={true}
+                    showDetailedAnalysis={true}
+                    currentUserId={user?.id}
+                    onClose={() => setViewingLiveTestResult(null)}
+                    onViewSolutions={() => setViewingLiveTestSolutions(true)}
+                  />
                 </Card>
               ) : (
                 <Card className="p-4">
@@ -1755,36 +2779,53 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
                         {liveTestResults
                           .filter(r => r.courseId === activeCourseId)
                           .sort((a, b) => b.submittedAt - a.submittedAt)
+                          .slice(0, 10)
                           .map(result => {
                             const test = liveTests.find(t => t.id === result.testId)
+                            // Use endTime from auto config for auto tests, or resultReleaseTime for scheduled
+                            const isAutoTest = result.testId.startsWith('auto-')
+                            const releaseTime = isAutoTest 
+                              ? currentAutoTestConfig?.endTime 
+                              : test?.resultReleaseTime
+                            const resultAvailable = isResultReleased(releaseTime, result.submittedAt)
+                            
                             return (
                               <div 
                                 key={result.id} 
                                 className="flex items-center justify-between p-3 border rounded hover:bg-muted/50 cursor-pointer"
-                                onClick={() => setViewingLiveTestResult(result)}
+                                onClick={() => resultAvailable && setViewingLiveTestResult(result)}
                               >
                                 <div>
                                   <p className="font-medium">{test?.title || 'Auto Test'}</p>
                                   <p className="text-xs text-muted-foreground">
-                                    {new Date(result.submittedAt).toLocaleDateString()} • {result.correct}/{result.total} correct
+                                    {new Date(result.submittedAt).toLocaleDateString()} • {resultAvailable ? `${result.correct}/${result.total} correct` : 'Result pending'}
                                   </p>
                                 </div>
                                 <div className="flex items-center gap-3">
-                                  <div className={`text-xl font-bold ${result.score >= 80 ? 'text-green-500' : result.score >= 50 ? 'text-yellow-500' : 'text-red-500'}`}>
-                                    {result.score}%
-                                  </div>
-                                  {test?.showSolution && (
-                                    <Button 
-                                      size="sm" 
-                                      variant="outline"
-                                      onClick={(e) => {
-                                        e.stopPropagation()
-                                        setViewingLiveTestResult(result)
-                                        setViewingLiveTestSolutions(true)
-                                      }}
-                                    >
-                                      <Eye className="h-4 w-4" />
-                                    </Button>
+                                  {resultAvailable ? (
+                                    <>
+                                      <div className={`text-xl font-bold ${result.score >= 80 ? 'text-green-500' : result.score >= 50 ? 'text-yellow-500' : 'text-red-500'}`}>
+                                        {result.score}%
+                                      </div>
+                                      {test?.showSolution && (
+                                        <Button 
+                                          size="sm" 
+                                          variant="outline"
+                                          onClick={(e) => {
+                                            e.stopPropagation()
+                                            setViewingLiveTestResult(result)
+                                            setViewingLiveTestSolutions(true)
+                                          }}
+                                        >
+                                          <Eye className="h-4 w-4" />
+                                        </Button>
+                                      )}
+                                    </>
+                                  ) : (
+                                    <div className="text-sm text-orange-500 flex items-center gap-1">
+                                      <Clock className="h-4 w-4" />
+                                      {getResultReleaseMessage(releaseTime)}
+                                    </div>
                                   )}
                                 </div>
                               </div>
@@ -1827,364 +2868,138 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
             </div>
           </Card>
 
-          {/* Live Test Management - Same as Group Study */}
+          {/* Live Test Management - Using Shared Component */}
           <Card className="p-4">
             <h3 className="font-semibold mb-3 flex items-center gap-2">
               <Clock className="h-5 w-5" />
               Live Test Management
             </h3>
             
-            {/* Schedule / Auto Daily Tabs - using buttons instead of nested Tabs */}
-            <div className="flex gap-1 p-1 bg-muted rounded-lg mb-4">
-              <button
-                onClick={() => setSettingsLiveTestTab('schedule')}
-                className={`flex-1 py-2 px-4 rounded text-sm font-medium transition-all ${
-                  settingsLiveTestTab === 'schedule'
-                    ? 'bg-background shadow'
-                    : 'hover:bg-background/50'
-                }`}
-              >
-                Schedule
-              </button>
-              <button
-                onClick={() => setSettingsLiveTestTab('auto-daily')}
-                className={`flex-1 py-2 px-4 rounded text-sm font-medium transition-all ${
-                  settingsLiveTestTab === 'auto-daily'
-                    ? 'bg-background shadow'
-                    : 'hover:bg-background/50'
-                }`}
-              >
-                Auto Daily
-              </button>
-            </div>
-            
-            {/* Schedule Tab Content */}
-            {settingsLiveTestTab === 'schedule' && (
-              <div className="space-y-4">
-                {showCreateLiveTest ? (
-                  <div className="p-4 border rounded-lg bg-muted/30 space-y-4">
-                    <div className="flex justify-between items-center">
-                      <h4 className="font-medium">Create New Test</h4>
-                      <Button variant="ghost" size="sm" onClick={() => setShowCreateLiveTest(false)}>
-                        <X className="h-4 w-4" />
+            <LiveTestManagement
+              context="personal"
+              contextId={activeCourseId || undefined}
+              categories={courseTopics.map(t => ({
+                id: t.id,
+                name: t.name,
+                questionCount: courseMCQList.filter(m => m.categoryId === t.id).length
+              }))}
+              scheduledTests={courseLiveTests.filter(t => t.status === 'scheduled').map(t => ({
+                id: t.id,
+                title: t.title,
+                duration: t.duration,
+                questionCount: t.questionCount,
+                showSolution: t.showSolution,
+                status: t.status as 'scheduled' | 'active' | 'completed',
+                createdAt: t.createdAt,
+                categoryIds: t.categoryIds || [],
+                source: t.source,
+                librarySubjectId: t.librarySubjectId,
+                libraryTopicId: t.libraryTopicId,
+                librarySubtopicId: t.librarySubtopicId,
+              }))}
+              autoTestConfig={currentAutoTestConfig ? {
+                id: currentAutoTestConfig.id,
+                enabled: currentAutoTestConfig.enabled,
+                title: currentAutoTestConfig.title,
+                categoryIds: currentAutoTestConfig.categoryIds,
+                startTime: currentAutoTestConfig.startTime,
+                endTime: currentAutoTestConfig.endTime,
+                duration: currentAutoTestConfig.duration,
+                questionCount: currentAutoTestConfig.questionCount,
+                activeDays: currentAutoTestConfig.activeDays,
+                showSolution: currentAutoTestConfig.showSolution,
+                showLeaderboard: currentAutoTestConfig.showLeaderboard ?? true,
+                resultReleaseTime: currentAutoTestConfig.resultReleaseTime || '23:00',
+                showDetailedAnalysis: currentAutoTestConfig.showDetailedAnalysis ?? true,
+                difficulty: currentAutoTestConfig.difficulty || 'all',
+                createdAt: currentAutoTestConfig.createdAt,
+                updatedAt: currentAutoTestConfig.updatedAt,
+              } : null}
+              onCreateTest={handleCreateTestFromShared}
+              onDeleteTest={handleDeleteTestFromShared}
+              onSaveAutoConfig={handleSaveAutoConfigFromShared}
+              showSourceSelector={true}
+              assetSubjects={assetSubjects}
+              getTopicsForSubject={(subjectId) => {
+                return getAssetTopicsBySubject(subjectId)
+              }}
+              getSubtopicsForTopic={(topicId) => {
+                return getAssetSubtopicsByTopic(topicId)
+              }}
+              getLibraryMCQCount={(subjectId, topicId, subtopicId) => {
+                let filtered = allAssets.filter(a => a.type === 'mcq' && a.subjectId === subjectId)
+                if (topicId) filtered = filtered.filter(a => a.topicId === topicId)
+                if (subtopicId) filtered = filtered.filter(a => a.subtopicId === subtopicId)
+                return filtered.length
+              }}
+            />
+          </Card>
+
+          {/* Existing Auto Tests List */}
+          {allCourseAutoTestConfigs.length > 0 && (
+            <Card className="p-4 border-2 border-primary/20">
+              <h3 className="font-semibold mb-3 flex items-center gap-2">
+                <Calendar className="h-5 w-5" /> 📋 Your Auto Daily Tests ({allCourseAutoTestConfigs.length})
+              </h3>
+              <div className="space-y-2">
+                {allCourseAutoTestConfigs.map(config => (
+                  <div key={config.id} className="flex items-center justify-between p-3 border rounded bg-muted/30">
+                    <div className="flex-1">
+                      <p className="font-medium text-sm">{config.title}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {config.questionCount} Q • {config.duration} min • ⏰ {config.startTime}-{config.endTime}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {config.source === 'library' 
+                          ? `📚 ${assetSubjects.find(s => s.id === config.librarySubjectId)?.name || 'Asset Library'}`
+                          : `📁 Course (${config.categoryIds?.length || 0} categories)`
+                        }
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className={`px-2 py-0.5 rounded text-xs ${
+                        config.enabled 
+                          ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' 
+                          : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'
+                      }`}>
+                        {config.enabled ? '✓ Active' : 'Off'}
+                      </span>
+                      <Button 
+                        variant="ghost" 
+                        size="sm"
+                        onClick={() => handleDeleteAutoConfig(config.id)}
+                        className="hover:bg-red-100 dark:hover:bg-red-900/30"
+                      >
+                        <Trash2 className="h-4 w-4 text-red-500" />
                       </Button>
                     </div>
-                    
-                    <div>
-                      <label className="text-sm font-medium">Test Title *</label>
-                      <Input 
-                        placeholder="e.g., Weekly Quiz #1"
-                        value={newLiveTestTitle}
-                        onChange={e => setNewLiveTestTitle(e.target.value)}
-                      />
-                    </div>
-                    
-                    <div>
-                      <label className="text-sm font-medium mb-2 block">Select Chapters (optional)</label>
-                      <div className="border rounded-lg p-3 max-h-40 overflow-y-auto space-y-2">
-                        <label className="flex items-center gap-2 p-2 hover:bg-muted rounded cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={newLiveTestCategories.length === 0}
-                            onChange={() => setNewLiveTestCategories([])}
-                            className="h-4 w-4"
-                          />
-                          <span className="text-sm font-medium">All Chapters ({courseMCQList.length} MCQs)</span>
-                        </label>
-                        {courseTopics.map(topic => {
-                          const count = courseMCQList.filter(q => q.categoryId === topic.id).length
-                          const isChecked = newLiveTestCategories.includes(topic.id)
-                          return (
-                            <label key={topic.id} className="flex items-center gap-2 p-2 hover:bg-muted rounded cursor-pointer">
-                              <input
-                                type="checkbox"
-                                checked={isChecked}
-                                onChange={e => {
-                                  if (e.target.checked) {
-                                    setNewLiveTestCategories([...newLiveTestCategories, topic.id])
-                                  } else {
-                                    setNewLiveTestCategories(newLiveTestCategories.filter(id => id !== topic.id))
-                                  }
-                                }}
-                                className="h-4 w-4"
-                              />
-                              <span className="text-sm">{topic.name} ({count})</span>
-                            </label>
-                          )
-                        })}
-                      </div>
-                    </div>
-                    
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="text-sm font-medium">Test Duration</label>
-                        <Select value={newLiveTestDuration} onValueChange={setNewLiveTestDuration}>
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="15">15 minutes</SelectItem>
-                            <SelectItem value="30">30 minutes</SelectItem>
-                            <SelectItem value="45">45 minutes</SelectItem>
-                            <SelectItem value="60">60 minutes</SelectItem>
-                            <SelectItem value="90">90 minutes</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div>
-                        <label className="text-sm font-medium">Questions Count</label>
-                        <Select value={newLiveTestQuestionCount} onValueChange={setNewLiveTestQuestionCount}>
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="10">10 Questions</SelectItem>
-                            <SelectItem value="20">20 Questions</SelectItem>
-                            <SelectItem value="30">30 Questions</SelectItem>
-                            <SelectItem value="50">50 Questions</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-                    
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm">Show solutions after test</span>
-                      <input 
-                        type="checkbox" 
-                        checked={newLiveTestShowSolution}
-                        onChange={e => setNewLiveTestShowSolution(e.target.checked)}
-                        className="h-4 w-4"
-                      />
-                    </div>
-                    
-                    <Button onClick={handleCreateLiveTest} className="w-full">
-                      <Plus className="h-4 w-4 mr-2" /> Create Test
-                    </Button>
                   </div>
-                ) : (
-                  <div className="space-y-4">
-                    <Button onClick={() => setShowCreateLiveTest(true)} className="w-full">
-                      <Plus className="h-4 w-4 mr-2" /> Create New Test
-                    </Button>
-                    
-                    {/* Scheduled Tests List */}
-                    {courseLiveTests.filter(t => t.status === 'scheduled').length > 0 ? (
-                      <div className="space-y-2">
-                        <h4 className="text-sm font-medium text-muted-foreground">Scheduled Tests</h4>
-                        {courseLiveTests
-                          .filter(t => t.status === 'scheduled')
-                          .map(test => (
-                          <div key={test.id} className="flex items-center justify-between p-3 border rounded">
-                            <div>
-                              <p className="font-medium">{test.title}</p>
-                              <p className="text-xs text-muted-foreground">
-                                {test.questionCount} questions • {test.duration} min
-                              </p>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs px-2 py-1 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
-                                Ready
-                              </span>
-                              <Button 
-                                variant="ghost" 
-                                size="sm"
-                                onClick={() => {
-                                  if (confirm('Delete this test?')) {
-                                    removeLiveTest(test.id)
-                                  }
-                                }}
-                              >
-                                <Trash2 className="h-4 w-4 text-red-500" />
-                              </Button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-sm text-muted-foreground text-center py-4">
-                        No scheduled tests. Create one above!
-                      </p>
-                    )}
-                  </div>
-                )}
+                ))}
               </div>
-            )}
-            
-            {/* Auto Daily Tab Content */}
-            {settingsLiveTestTab === 'auto-daily' && (
-              <div className="space-y-4">
-                {/* Enable Toggle */}
-                <div className="flex items-center justify-between p-4 border rounded-lg bg-muted/30">
-                  <div>
-                    <h4 className="font-medium">Enable Auto Daily Test</h4>
-                    <p className="text-sm text-muted-foreground">
-                      Practice with a new test every day at the specified time
-                    </p>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={autoTestEnabled}
-                    onChange={e => setAutoTestEnabled(e.target.checked)}
-                    className="h-5 w-5"
-                  />
-                </div>
-                
-                {/* Config Form */}
-                <div className={`space-y-4 ${!autoTestEnabled ? 'opacity-50 pointer-events-none' : ''}`}>
-                  <div>
-                    <label className="text-sm font-medium">Test Title</label>
-                    <Input
-                      value={autoTestTitle}
-                      onChange={e => setAutoTestTitle(e.target.value)}
-                      placeholder="Daily Practice Test"
-                    />
-                  </div>
-                  
-                  <div>
-                    <label className="text-sm font-medium mb-2 block">Select Chapters</label>
-                    <div className="border rounded-lg p-3 max-h-40 overflow-y-auto space-y-2">
-                      {courseTopics.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">Add chapters first.</p>
-                      ) : (
-                        <>
-                          <label className="flex items-center gap-2 p-2 hover:bg-muted rounded cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={autoTestCategories.length === 0}
-                              onChange={() => setAutoTestCategories([])}
-                              className="h-4 w-4"
-                            />
-                            <span className="text-sm font-medium">All Chapters ({courseMCQList.length})</span>
-                          </label>
-                          {courseTopics.map(topic => {
-                            const count = courseMCQList.filter(q => q.categoryId === topic.id).length
-                            const isChecked = autoTestCategories.includes(topic.id)
-                            return (
-                              <label key={topic.id} className="flex items-center gap-2 p-2 hover:bg-muted rounded cursor-pointer">
-                                <input
-                                  type="checkbox"
-                                  checked={isChecked}
-                                  onChange={e => {
-                                    if (e.target.checked) {
-                                      setAutoTestCategories([...autoTestCategories, topic.id])
-                                    } else {
-                                      setAutoTestCategories(autoTestCategories.filter(id => id !== topic.id))
-                                    }
-                                  }}
-                                  className="h-4 w-4"
-                                />
-                                <span className="text-sm">{topic.name} ({count})</span>
-                              </label>
-                            )
-                          })}
-                        </>
-                      )}
-                    </div>
-                  </div>
-                  
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="text-sm font-medium">Daily Start Time</label>
-                      <Input
-                        type="time"
-                        value={autoTestStartTime}
-                        onChange={e => setAutoTestStartTime(e.target.value)}
-                      />
-                    </div>
-                    <div>
-                      <label className="text-sm font-medium">Daily End Time</label>
-                      <Input
-                        type="time"
-                        value={autoTestEndTime}
-                        onChange={e => setAutoTestEndTime(e.target.value)}
-                      />
-                    </div>
-                  </div>
-                  
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="text-sm font-medium">Test Duration</label>
-                      <Select value={autoTestDuration} onValueChange={setAutoTestDuration}>
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="15">15 minutes</SelectItem>
-                          <SelectItem value="30">30 minutes</SelectItem>
-                          <SelectItem value="45">45 minutes</SelectItem>
-                          <SelectItem value="60">60 minutes</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div>
-                      <label className="text-sm font-medium">Questions Count</label>
-                      <Select value={autoTestQuestionCount} onValueChange={setAutoTestQuestionCount}>
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="10">10 Questions</SelectItem>
-                          <SelectItem value="20">20 Questions</SelectItem>
-                          <SelectItem value="30">30 Questions</SelectItem>
-                          <SelectItem value="50">50 Questions</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-                  
-                  <div>
-                    <label className="text-sm font-medium mb-2 block">Active Days</label>
-                    <div className="flex flex-wrap gap-2">
-                      {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, idx) => (
-                        <button
-                          key={day}
-                          onClick={() => {
-                            if (autoTestDays.includes(idx)) {
-                              setAutoTestDays(autoTestDays.filter(d => d !== idx))
-                            } else {
-                              setAutoTestDays([...autoTestDays, idx])
-                            }
-                          }}
-                          className={`px-3 py-1 rounded text-sm ${
-                            autoTestDays.includes(idx)
-                              ? 'bg-primary text-primary-foreground'
-                              : 'bg-muted hover:bg-muted/80'
-                          }`}
-                        >
-                          {day}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm">Show solutions after test</span>
-                    <input
-                      type="checkbox"
-                      checked={autoTestShowSolution}
-                      onChange={e => setAutoTestShowSolution(e.target.checked)}
-                      className="h-4 w-4"
-                    />
-                  </div>
-                </div>
-                
-                <Button onClick={handleSaveAutoTestConfig} className="w-full">
-                  <Check className="h-4 w-4 mr-2" />
-                  Save Auto Test Settings
-                </Button>
-                
-                {autoTestEnabled && currentAutoTestConfig && (
-                  <div className="p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
-                    <p className="text-sm font-medium text-green-700 dark:text-green-400">
-                      ✓ Auto Test Active
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Runs daily from {currentAutoTestConfig.startTime} to {currentAutoTestConfig.endTime}
-                    </p>
-                  </div>
-                )}
+              <p className="text-xs text-muted-foreground mt-3 italic">
+                💡 Use "Auto Daily" tab above to add more auto tests
+              </p>
+            </Card>
+          )}
+
+          {/* Haptic Feedback */}
+          <Card className="p-4">
+            <h3 className="font-semibold mb-3 flex items-center gap-2">
+              <Vibrate className="h-5 w-5" /> হ্যাপটিক ফিডব্যাক
+            </h3>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium">ভাইব্রেশন চালু করুন</p>
+                <p className="text-xs text-muted-foreground">বাটন প্রেসে ভাইব্রেশন অনুভব করুন</p>
               </div>
-            )}
+              <Switch
+                checked={hapticEnabled}
+                onCheckedChange={(checked) => {
+                  setHapticEnabled(checked)
+                  if (checked) triggerHaptic()
+                }}
+              />
+            </div>
           </Card>
 
           <Card className="p-4 border-destructive/50">
@@ -2607,6 +3422,27 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
                           rows={2}
                         />
                       </div>
+                      <div>
+                        <label className="text-sm font-medium">Difficulty Level</label>
+                        <div className="flex gap-2 mt-1">
+                          {(['easy', 'medium', 'hard'] as const).map(level => (
+                            <button
+                              key={level}
+                              type="button"
+                              onClick={() => setMcqDifficulty(level)}
+                              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                                mcqDifficulty === level
+                                  ? level === 'easy' ? 'bg-green-500 text-white' 
+                                    : level === 'medium' ? 'bg-yellow-500 text-white'
+                                    : 'bg-red-500 text-white'
+                                  : 'bg-muted hover:bg-muted/80'
+                              }`}
+                            >
+                              {level === 'easy' ? '🟢 Easy' : level === 'medium' ? '🟡 Medium' : '🔴 Hard'}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                       <div className="flex gap-2 justify-end pt-4">
                         <Button variant="outline" onClick={resetContentForm}>Cancel</Button>
                         <Button 
@@ -2689,6 +3525,27 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
                     onChange={e => setMcqExplanation(e.target.value)}
                     rows={2}
                   />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">Difficulty Level</label>
+                  <div className="flex gap-2 mt-1">
+                    {(['easy', 'medium', 'hard'] as const).map(level => (
+                      <button
+                        key={level}
+                        type="button"
+                        onClick={() => setMcqDifficulty(level)}
+                        className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                          mcqDifficulty === level
+                            ? level === 'easy' ? 'bg-green-500 text-white' 
+                              : level === 'medium' ? 'bg-yellow-500 text-white'
+                              : 'bg-red-500 text-white'
+                            : 'bg-muted hover:bg-muted/80'
+                        }`}
+                      >
+                        {level === 'easy' ? '🟢 Easy' : level === 'medium' ? '🟡 Medium' : '🔴 Hard'}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
               <div className="flex gap-2 justify-end pt-4">
@@ -2853,6 +3710,28 @@ export function PersonalDashboard({ activeSubTab, setActiveSubTab }: PersonalDas
                     placeholder="Explain the correct answer..."
                     rows={2}
                   />
+                </div>
+
+                <div>
+                  <label className="text-sm font-medium mb-1 block">Difficulty Level</label>
+                  <div className="flex gap-2 mt-1">
+                    {(['easy', 'medium', 'hard'] as const).map(level => (
+                      <button
+                        key={level}
+                        type="button"
+                        onClick={() => setEditMcqDifficulty(level)}
+                        className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                          editMcqDifficulty === level
+                            ? level === 'easy' ? 'bg-green-500 text-white' 
+                              : level === 'medium' ? 'bg-yellow-500 text-white'
+                              : 'bg-red-500 text-white'
+                            : 'bg-muted hover:bg-muted/80'
+                        }`}
+                      >
+                        {level === 'easy' ? '🟢 Easy' : level === 'medium' ? '🟡 Medium' : '🔴 Hard'}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
                 <div className="flex gap-2 justify-end pt-4 border-t">

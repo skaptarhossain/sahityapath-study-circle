@@ -24,6 +24,7 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
+import { ResultAnalysisSettings } from '@/components/live-test';
 import { useCoachingStore } from '@/stores/coaching-store';
 import { useAuthStore } from '@/stores/auth-store';
 import type { CourseLiveTest, CourseMCQ } from '@/types';
@@ -70,6 +71,10 @@ export function LiveTestManager({ courseId }: LiveTestManagerProps) {
   const [autoTestDuration, setAutoTestDuration] = useState('30');
   const [autoTestQuestionCount, setAutoTestQuestionCount] = useState('20');
   const [autoTestDays, setAutoTestDays] = useState<number[]>([0, 1, 2, 3, 4, 5, 6]);
+  // Result Analysis Settings
+  const [autoTestResultReleaseTime, setAutoTestResultReleaseTime] = useState('23:00');
+  const [autoTestShowLeaderboard, setAutoTestShowLeaderboard] = useState(true);
+  const [autoTestShowDetailedAnalysis, setAutoTestShowDetailedAnalysis] = useState(true);
   
   // Get tests for this course
   const courseLiveTests = useMemo(() => {
@@ -549,6 +554,18 @@ export function LiveTestManager({ courseId }: LiveTestManagerProps) {
                   ))}
                 </div>
               </div>
+              
+              {/* Result Analysis Settings - Using Shared Component */}
+              <ResultAnalysisSettings
+                context="coaching"
+                disabled={!autoTestEnabled}
+                resultReleaseTime={autoTestResultReleaseTime}
+                showLeaderboard={autoTestShowLeaderboard}
+                showDetailedAnalysis={autoTestShowDetailedAnalysis}
+                onResultReleaseTimeChange={setAutoTestResultReleaseTime}
+                onShowLeaderboardChange={setAutoTestShowLeaderboard}
+                onShowDetailedAnalysisChange={setAutoTestShowDetailedAnalysis}
+              />
               
               <div className="flex items-center gap-2 p-3 bg-green-50 dark:bg-green-900/20 rounded-lg text-green-700 dark:text-green-400">
                 <CheckCircle2 className="h-4 w-4" />

@@ -148,6 +148,16 @@ export interface AutoLiveTestConfig {
   autoReleaseResult: boolean
   showSolution: boolean
   showLeaderboard: boolean
+  // Result Release Settings
+  resultReleaseTime?: string  // Format: "HH:mm" - when to show results
+  showDetailedAnalysis?: boolean
+  // Library Source (optional)
+  source?: 'group' | 'library'
+  librarySubjectId?: string
+  libraryTopicId?: string
+  librarySubtopicId?: string
+  // Difficulty Level
+  difficulty?: 'all' | 'easy' | 'medium' | 'hard'
   createdBy: string
   createdAt: number
   updatedAt: number
@@ -172,6 +182,15 @@ export interface LiveTest {
   createdBy: string
   createdByName: string
   createdAt: number
+  // Result Release Settings
+  resultReleaseTime?: string  // Format: "HH:mm" - when to show results
+  // Library Source (optional)
+  source?: 'group' | 'library'
+  librarySubjectId?: string
+  libraryTopicId?: string
+  librarySubtopicId?: string
+  // Difficulty Level
+  difficulty?: 'all' | 'easy' | 'medium' | 'hard'
 }
 
 // Live Test Participant Result
@@ -1065,6 +1084,16 @@ export interface PersonalLiveTest {
   status: 'scheduled' | 'active' | 'completed'
   showSolution: boolean
   createdAt: number
+  // Asset Library source
+  source?: 'course' | 'library'
+  librarySubjectId?: string
+  libraryTopicId?: string
+  librarySubtopicId?: string
+  // Result Release Settings
+  resultReleaseTime?: string  // Format: "HH:mm"
+  autoReleaseResult?: boolean
+  // Difficulty Level
+  difficulty?: 'all' | 'easy' | 'medium' | 'hard'
 }
 
 export interface PersonalLiveTestResult {
@@ -1072,14 +1101,26 @@ export interface PersonalLiveTestResult {
   testId: string
   courseId: string
   userId: string
+  userName?: string
   score: number
   correct: number
   wrong: number
   unanswered: number
   total: number
   timeTaken: number
-  answers: { questionId: string; selected: number | null; correct: number }[]
+  answers: { questionId: string; selected: number | null; correct: number; categoryId?: string }[]
   submittedAt: number
+  // Detailed Analysis Data
+  topicBreakdown?: {
+    topicId: string
+    topicName: string
+    total: number
+    correct: number
+    wrong: number
+    accuracy: number
+  }[]
+  averageTimePerQuestion?: number
+  rank?: number  // Position in leaderboard
 }
 
 export interface PersonalAutoLiveTestConfig {
@@ -1095,6 +1136,17 @@ export interface PersonalAutoLiveTestConfig {
   questionCount: number
   activeDays: number[]  // 0-6, Sunday = 0
   showSolution: boolean
+  // Result Analysis Settings
+  resultReleaseTime: string  // Format: "HH:mm" - when to show results
+  showLeaderboard: boolean
+  showDetailedAnalysis: boolean  // Show charts and detailed breakdown
+  // Library Source (optional)
+  source?: 'course' | 'library'
+  librarySubjectId?: string
+  libraryTopicId?: string
+  librarySubtopicId?: string
+  // Difficulty Level
+  difficulty?: 'all' | 'easy' | 'medium' | 'hard'
   createdAt: number
   updatedAt: number
 }

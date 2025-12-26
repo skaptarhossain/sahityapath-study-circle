@@ -1,11 +1,15 @@
+import { useState } from 'react'
 import { motion } from 'framer-motion'
-import { Settings, User, Bell, Shield, Palette, Globe, Download, Trash2, LogOut, ChevronRight, Moon, Sun, Monitor, Vibrate } from 'lucide-react'
+import { Settings, User, Bell, Shield, Palette, Globe, Download, Trash2, LogOut, ChevronRight, Moon, Sun, Monitor, Vibrate, Loader2 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { useThemeStore } from '@/stores/theme-store'
 import { useAuthStore } from '@/stores/auth-store'
 import { cn } from '@/lib/utils'
+import { ProfileEditDialog } from '@/components/profile-edit-dialog'
+import { DeleteAccountDialog } from '@/components/delete-account-dialog'
+import { usePushNotifications } from '@/hooks/use-push-notifications'
 
 const containerVariants = { hidden: { opacity: 0 }, visible: { opacity: 1, transition: { staggerChildren: 0.1 } } }
 const itemVariants = { hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } }
@@ -13,6 +17,9 @@ const itemVariants = { hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 
 export function SettingsPage() {
   const { theme, setTheme, hapticEnabled, setHapticEnabled, triggerHaptic } = useThemeStore()
   const { user, logout } = useAuthStore()
+  const [showProfileEdit, setShowProfileEdit] = useState(false)
+  const [showDeleteAccount, setShowDeleteAccount] = useState(false)
+  const { isSupported: isPushSupported, isEnabled: isPushEnabled, isLoading: isPushLoading, toggleNotifications } = usePushNotifications()
 
   const themeOptions = [
     { value: 'light', label: 'Light', icon: Sun },
@@ -32,9 +39,20 @@ export function SettingsPage() {
           <CardHeader><CardTitle className="flex items-center gap-2"><User className="h-5 w-5" />Profile</CardTitle><CardDescription>Manage your account</CardDescription></CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-center gap-4">
-              <div className="h-16 w-16 rounded-full bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center text-2xl font-bold">{user?.displayName?.[0] || user?.email?.[0] || 'U'}</div>
-              <div className="flex-1"><p className="font-medium">{user?.displayName || 'User'}</p><p className="text-sm text-muted-foreground">{user?.email || 'guest@local'}</p>{user?.isGuest && <span className="text-xs bg-yellow-500/10 text-yellow-600 px-2 py-0.5 rounded mt-1 inline-block">Guest Account</span>}</div>
-              {!user?.isGuest && <Button variant="outline" onClick={() => alert('🚧 Coming Soon!')}>Edit Profile</Button>}
+              <div className="h-16 w-16 rounded-full bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center text-2xl font-bold overflow-hidden">
+                {user?.photoURL ? (
+                  <img src={user.photoURL} alt="Profile" className="h-full w-full object-cover" />
+                ) : (
+                  user?.displayName?.[0] || user?.email?.[0] || 'U'
+                )}
+              </div>
+              <div className="flex-1">
+                <p className="font-medium">{user?.displayName || 'User'}</p>
+                <p className="text-sm text-muted-foreground">{user?.email || 'guest@local'}</p>
+                {user?.institution && <p className="text-xs text-muted-foreground">{user.institution}</p>}
+                {user?.isGuest && <span className="text-xs bg-yellow-500/10 text-yellow-600 px-2 py-0.5 rounded mt-1 inline-block">Guest Account</span>}
+              </div>
+              {!user?.isGuest && <Button variant="outline" onClick={() => setShowProfileEdit(true)}>Edit Profile</Button>}
             </div>
           </CardContent>
         </Card>
@@ -85,7 +103,22 @@ export function SettingsPage() {
         <Card>
           <CardHeader><CardTitle className="flex items-center gap-2"><Bell className="h-5 w-5" />Notifications</CardTitle><CardDescription>Notification preferences</CardDescription></CardHeader>
           <CardContent className="space-y-4">
-            <div className="flex items-center justify-between"><div><p className="font-medium">Push Notifications</p><p className="text-sm text-muted-foreground">Receive push notifications</p></div><Switch defaultChecked /></div>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="font-medium">Push Notifications</p>
+                <p className="text-sm text-muted-foreground">
+                  {isPushSupported ? 'Receive push notifications' : 'Not supported in this browser'}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {isPushLoading && <Loader2 className="h-4 w-4 animate-spin" />}
+                <Switch 
+                  checked={isPushEnabled} 
+                  onCheckedChange={toggleNotifications}
+                  disabled={!isPushSupported || isPushLoading}
+                />
+              </div>
+            </div>
             <div className="flex items-center justify-between"><div><p className="font-medium">Email Notifications</p><p className="text-sm text-muted-foreground">Receive updates via email</p></div><Switch defaultChecked /></div>
             <div className="flex items-center justify-between"><div><p className="font-medium">Study Reminders</p><p className="text-sm text-muted-foreground">Get study session reminders</p></div><Switch defaultChecked /></div>
             <div className="flex items-center justify-between"><div><p className="font-medium">Group Activity</p><p className="text-sm text-muted-foreground">Notifications for group activities</p></div><Switch /></div>
@@ -110,7 +143,7 @@ export function SettingsPage() {
           <CardContent className="space-y-3">
             <div className="flex items-center justify-between p-3 rounded-lg bg-destructive/5">
               <div><p className="font-medium">Delete Account</p><p className="text-sm text-muted-foreground">Permanently delete your account</p></div>
-              <Button variant="destructive" size="sm" onClick={() => alert('⚠️ This feature requires email confirmation. Coming Soon!')}>Delete</Button>
+              <Button variant="destructive" size="sm" onClick={() => setShowDeleteAccount(true)} disabled={user?.isGuest}>Delete</Button>
             </div>
           </CardContent>
         </Card>
@@ -119,6 +152,18 @@ export function SettingsPage() {
       <motion.div variants={itemVariants}>
         <Button variant="outline" className="w-full" onClick={logout}><LogOut className="h-4 w-4 mr-2" />Logout</Button>
       </motion.div>
+
+      {/* Profile Edit Dialog */}
+      <ProfileEditDialog
+        open={showProfileEdit}
+        onOpenChange={setShowProfileEdit}
+      />
+
+      {/* Delete Account Dialog */}
+      <DeleteAccountDialog
+        open={showDeleteAccount}
+        onOpenChange={setShowDeleteAccount}
+      />
     </motion.div>
   )
 }

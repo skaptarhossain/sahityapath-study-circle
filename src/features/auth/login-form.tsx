@@ -3,7 +3,7 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { motion } from 'framer-motion'
-import { Mail, Lock, User, Eye, EyeOff, Loader2, UserCircle } from 'lucide-react'
+import { Mail, Lock, User, Eye, EyeOff, Loader2, UserCircle, KeyRound } from 'lucide-react'
 import { 
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword, 
@@ -17,6 +17,7 @@ import { useAuthStore } from '@/stores/auth-store'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { PasswordResetDialog } from '@/components/password-reset-dialog'
 
 const loginSchema = z.object({
   email: z.string().email('Please enter a valid email'),
@@ -34,6 +35,7 @@ export function LoginForm() {
   const [showPassword, setShowPassword] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
+  const [showPasswordReset, setShowPasswordReset] = useState(false)
   const { setUser } = useAuthStore()
 
   const form = useForm<RegisterData>({
@@ -252,6 +254,20 @@ export function LoginForm() {
                 )}
               </div>
 
+              {/* Forgot Password Link */}
+              {!isRegister && (
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setShowPasswordReset(true)}
+                    className="text-xs text-primary hover:underline flex items-center gap-1"
+                  >
+                    <KeyRound className="h-3 w-3" />
+                    পাসওয়ার্ড ভুলে গেছেন?
+                  </button>
+                </div>
+              )}
+
               <Button type="submit" className="w-full" disabled={isLoading}>
                 {isLoading ? (
                   <Loader2 className="h-4 w-4 animate-spin mr-2" />
@@ -313,6 +329,13 @@ export function LoginForm() {
           </CardContent>
         </Card>
       </motion.div>
+
+      {/* Password Reset Dialog */}
+      <PasswordResetDialog
+        open={showPasswordReset}
+        onOpenChange={setShowPasswordReset}
+        defaultEmail={form.getValues('email')}
+      />
     </div>
   )
 }

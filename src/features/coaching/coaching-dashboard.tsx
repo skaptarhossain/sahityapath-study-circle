@@ -14,6 +14,8 @@ import {
   DollarSign,
   Play,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   Settings,
   BarChart3,
   MessageSquare,
@@ -220,19 +222,20 @@ function StatsCard({ icon: Icon, label, value, trend, color }: { icon: React.Ele
     rose: 'bg-rose-100 dark:bg-rose-900/50 text-rose-600',
   };
   return (
-    <motion.div variants={fadeIn} className="bg-white dark:bg-gray-900 rounded-2xl p-4 sm:p-5 border border-gray-200 dark:border-gray-800">
-      <div className="flex items-center gap-3 sm:justify-between sm:gap-0">
-        <div className={`p-2.5 sm:p-3 rounded-xl ${colorClasses[color]}`}><Icon className="w-5 h-5 sm:w-6 sm:h-6" /></div>
-        <div className="flex-1 sm:hidden">
-          <p className="text-xl font-bold text-gray-900 dark:text-white">{value}</p>
-          <p className="text-xs text-gray-500">{label}</p>
+    <motion.div variants={fadeIn} className="bg-white dark:bg-gray-900 rounded-xl sm:rounded-2xl p-3 sm:p-5 border border-gray-200 dark:border-gray-800">
+      <div className="flex items-center gap-2 sm:gap-3 sm:justify-between">
+        <div className={`p-2 sm:p-3 rounded-lg sm:rounded-xl ${colorClasses[color]}`}><Icon className="w-4 h-4 sm:w-6 sm:h-6" /></div>
+        <div className="flex-1 min-w-0 sm:hidden">
+          <p className="text-lg font-bold text-gray-900 dark:text-white truncate">{value}</p>
+          <p className="text-[10px] text-gray-500 truncate">{label}</p>
         </div>
-        {trend && <span className="flex items-center gap-1 text-xs text-emerald-600 bg-emerald-100 dark:bg-emerald-900/50 px-2 py-1 rounded-full"><TrendingUp className="w-3 h-3" />{trend}</span>}
+        {trend && <span className="hidden sm:flex items-center gap-1 text-xs text-emerald-600 bg-emerald-100 dark:bg-emerald-900/50 px-2 py-1 rounded-full"><TrendingUp className="w-3 h-3" />{trend}</span>}
       </div>
       <div className="mt-3 hidden sm:block">
         <p className="text-2xl font-bold text-gray-900 dark:text-white">{value}</p>
         <p className="text-sm text-gray-500">{label}</p>
       </div>
+      {trend && <span className="flex sm:hidden items-center gap-1 text-[10px] text-emerald-600 mt-1"><TrendingUp className="w-2.5 h-2.5" />{trend}</span>}
     </motion.div>
   );
 }
@@ -263,6 +266,17 @@ export function CoachingDashboard({ activeSubTab, setActiveSubTab }: CoachingDas
   const [sortBy, setSortBy] = useState<string>('popular');
   const [selectedTeacher, setSelectedTeacher] = useState<string>('all');
   const [activeLetter, setActiveLetter] = useState<string | null>(null);
+  
+  // Collapsible sections state for Settings
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
+    students: true,
+    liveTest: false,
+    questionBank: false,
+  });
+  
+  const toggleSection = (section: string) => {
+    setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }));
+  };
 
   // Load data from Firestore on mount
   useEffect(() => {
@@ -392,14 +406,15 @@ export function CoachingDashboard({ activeSubTab, setActiveSubTab }: CoachingDas
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6">
         {(activeSubTab === 'my-courses' || activeSubTab === 'settings') && (
-          <motion.div variants={staggerContainer} initial="hidden" animate="visible" className="space-y-6">
-            {hasTeacherProfile && (
+          <motion.div variants={staggerContainer} initial="hidden" animate="visible" className="space-y-4 sm:space-y-6">
+            {/* Stats Grid - Only show on My Courses tab, not Settings */}
+            {hasTeacherProfile && activeSubTab === 'my-courses' && (
               <>
                 {/* Stats Grid - 2x2 on mobile, 4 columns on desktop */}
-                <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
-                  <StatsCard icon={BookOpen} label="My Courses" value={teacherStats.totalCourses} color="indigo" />
+                <div className="grid grid-cols-2 gap-2 sm:gap-4 lg:grid-cols-4">
+                  <StatsCard icon={BookOpen} label="Courses" value={teacherStats.totalCourses} color="indigo" />
                   <StatsCard icon={Users} label="Students" value={teacherStats.totalStudents.toLocaleString()} trend="+12%" color="emerald" />
                   <StatsCard icon={DollarSign} label="Revenue" value={`৳${teacherStats.totalRevenue.toLocaleString()}`} trend="+8%" color="amber" />
                   <StatsCard icon={Star} label="Rating" value={teacherStats.avgRating} color="rose" />
@@ -429,17 +444,46 @@ export function CoachingDashboard({ activeSubTab, setActiveSubTab }: CoachingDas
                   </motion.div>
                 ) : (
                   <>
-                    {/* Action Buttons - Scrollable on mobile */}
-                    <div className="flex gap-2 overflow-x-auto pb-2 -mx-4 px-4 sm:mx-0 sm:px-0 sm:flex-wrap sm:overflow-visible scrollbar-hide">
-                      <Button size="sm" className="shrink-0" onClick={() => setShowCourseForm(true)}>
-                        <Plus className="w-4 h-4 sm:mr-2" />
-                        <span className="hidden sm:inline">Create Course</span>
+                    {/* Action Buttons - Grid on mobile with labels */}
+                    <div className="grid grid-cols-5 gap-1.5 sm:hidden">
+                      <button onClick={() => setShowCourseForm(true)} className="flex flex-col items-center gap-1 p-2 bg-primary text-primary-foreground rounded-xl">
+                        <Plus className="w-5 h-5" />
+                        <span className="text-[9px] font-medium">New</span>
+                      </button>
+                      <button onClick={() => setShowProfileForm(true)} className="flex flex-col items-center gap-1 p-2 bg-muted rounded-xl">
+                        <Settings className="w-5 h-5" />
+                        <span className="text-[9px]">Profile</span>
+                      </button>
+                      <button onClick={async () => {
+                        try {
+                          await syncLocalToFirestore(teacherProfile, myCourses);
+                          toast.success('Cloud Sync সম্পন্ন!', 'আপনার সব data cloud এ save হয়েছে');
+                        } catch (err) {
+                          console.error('Sync failed:', err);
+                          toast.error('Sync ব্যর্থ!', (err as Error).message);
+                        }
+                      }} className="flex flex-col items-center gap-1 p-2 bg-muted rounded-xl">
+                        <Cloud className="w-5 h-5" />
+                        <span className="text-[9px]">Sync</span>
+                      </button>
+                      <button className="flex flex-col items-center gap-1 p-2 bg-muted rounded-xl">
+                        <BarChart3 className="w-5 h-5" />
+                        <span className="text-[9px]">Report</span>
+                      </button>
+                      <button className="flex flex-col items-center gap-1 p-2 bg-muted rounded-xl">
+                        <MessageSquare className="w-5 h-5" />
+                        <span className="text-[9px]">Message</span>
+                      </button>
+                    </div>
+                    {/* Desktop action buttons */}
+                    <div className="hidden sm:flex gap-2 flex-wrap">
+                      <Button size="sm" onClick={() => setShowCourseForm(true)}>
+                        <Plus className="w-4 h-4 mr-2" />Create Course
                       </Button>
-                      <Button size="sm" variant="outline" className="shrink-0" onClick={() => setShowProfileForm(true)}>
-                        <Settings className="w-4 h-4 sm:mr-2" />
-                        <span className="hidden sm:inline">Edit Profile</span>
+                      <Button size="sm" variant="outline" onClick={() => setShowProfileForm(true)}>
+                        <Settings className="w-4 h-4 mr-2" />Edit Profile
                       </Button>
-                      <Button size="sm" variant="outline" className="shrink-0" onClick={async () => {
+                      <Button size="sm" variant="outline" onClick={async () => {
                         try {
                           await syncLocalToFirestore(teacherProfile, myCourses);
                           toast.success('Cloud Sync সম্পন্ন!', 'আপনার সব data cloud এ save হয়েছে');
@@ -448,16 +492,13 @@ export function CoachingDashboard({ activeSubTab, setActiveSubTab }: CoachingDas
                           toast.error('Sync ব্যর্থ!', (err as Error).message);
                         }
                       }}>
-                        <Cloud className="w-4 h-4 sm:mr-2" />
-                        <span className="hidden sm:inline">Sync</span>
+                        <Cloud className="w-4 h-4 mr-2" />Sync
                       </Button>
-                      <Button size="sm" variant="outline" className="shrink-0">
-                        <BarChart3 className="w-4 h-4 sm:mr-2" />
-                        <span className="hidden sm:inline">Analytics</span>
+                      <Button size="sm" variant="outline">
+                        <BarChart3 className="w-4 h-4 mr-2" />Analytics
                       </Button>
-                      <Button size="sm" variant="outline" className="shrink-0">
-                        <MessageSquare className="w-4 h-4 sm:mr-2" />
-                        <span className="hidden sm:inline">Messages</span>
+                      <Button size="sm" variant="outline">
+                        <MessageSquare className="w-4 h-4 mr-2" />Messages
                       </Button>
                     </div>
                     <div>
@@ -495,48 +536,110 @@ export function CoachingDashboard({ activeSubTab, setActiveSubTab }: CoachingDas
                     </div>
                   </motion.div>
                 ) : (
-                  <>
-                    {/* Page Title */}
-                    <div className="flex items-center gap-2">
-                      <Settings className="h-5 w-5 text-primary" />
-                      <h2 className="text-lg font-semibold">Teacher Settings</h2>
+                  <div className="space-y-3">
+                    {/* Quick Actions - Mobile only */}
+                    <div className="flex items-center gap-2 sm:hidden">
+                      <Button size="sm" variant="outline" className="flex-1" onClick={() => setShowProfileForm(true)}>
+                        <Settings className="w-4 h-4 mr-1.5" />
+                        Edit Profile
+                      </Button>
+                      <Button size="sm" variant="outline" className="flex-1" onClick={async () => {
+                        try {
+                          await syncLocalToFirestore(teacherProfile, myCourses);
+                          toast.success('Synced!', 'Data saved to cloud');
+                        } catch (err) {
+                          toast.error('Sync Failed', (err as Error).message);
+                        }
+                      }}>
+                        <Cloud className="w-4 h-4 mr-1.5" />
+                        Sync
+                      </Button>
                     </div>
 
-                    {/* Students Section */}
-                    <StudentManagement />
-
-                    {/* Live Test Management */}
-                    <Card className="border-2 border-cyan-200 dark:border-cyan-800">
-                      <CardHeader className="pb-3">
-                        <CardTitle className="flex items-center gap-2 text-base">
-                          <Timer className="h-5 w-5 text-cyan-500" />
-                          Live Test Management
-                        </CardTitle>
-                        <p className="text-xs text-muted-foreground">
-                          Schedule and manage live tests for your students
-                        </p>
-                      </CardHeader>
-                      <CardContent className="pt-0">
-                        <LiveTestManager />
-                      </CardContent>
+                    {/* Students Section - Collapsible */}
+                    <Card className="border border-indigo-200 dark:border-indigo-800 overflow-hidden">
+                      <button 
+                        onClick={() => toggleSection('students')}
+                        className="w-full px-3 py-2.5 flex items-center justify-between bg-indigo-50 dark:bg-indigo-900/30 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 transition-colors"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Users className="h-4 w-4 text-indigo-500" />
+                          <span className="font-medium text-sm">Students</span>
+                        </div>
+                        {expandedSections.students ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                      </button>
+                      <AnimatePresence>
+                        {expandedSections.students && (
+                          <motion.div 
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: 'auto', opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            transition={{ duration: 0.2 }}
+                          >
+                            <CardContent className="pt-3 px-3">
+                              <StudentManagement />
+                            </CardContent>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
                     </Card>
 
-                    {/* Question Bank */}
-                    <Card className="border-2 border-green-200 dark:border-green-800">
-                      <CardHeader className="pb-3">
-                        <CardTitle className="flex items-center gap-2 text-base">
-                          <HelpCircle className="h-5 w-5 text-green-500" />
-                          Question Bank
-                        </CardTitle>
-                        <p className="text-xs text-muted-foreground">
-                          Create and manage your question bank for quizzes and tests
-                        </p>
-                      </CardHeader>
-                      <CardContent className="pt-0">
-                        <QuestionBankManager />
-                      </CardContent>
+                    {/* Live Test Management - Collapsible */}
+                    <Card className="border border-cyan-200 dark:border-cyan-800 overflow-hidden">
+                      <button 
+                        onClick={() => toggleSection('liveTest')}
+                        className="w-full px-3 py-2.5 flex items-center justify-between bg-cyan-50 dark:bg-cyan-900/30 hover:bg-cyan-100 dark:hover:bg-cyan-900/50 transition-colors"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Timer className="h-4 w-4 text-cyan-500" />
+                          <span className="font-medium text-sm">Live Tests</span>
+                        </div>
+                        {expandedSections.liveTest ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                      </button>
+                      <AnimatePresence>
+                        {expandedSections.liveTest && (
+                          <motion.div 
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: 'auto', opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            transition={{ duration: 0.2 }}
+                          >
+                            <CardContent className="pt-3">
+                              <LiveTestManager />
+                            </CardContent>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
                     </Card>
-                  </>
+
+                    {/* Question Bank - Collapsible */}
+                    <Card className="border border-green-200 dark:border-green-800 overflow-hidden">
+                      <button 
+                        onClick={() => toggleSection('questionBank')}
+                        className="w-full px-3 py-2.5 flex items-center justify-between bg-green-50 dark:bg-green-900/30 hover:bg-green-100 dark:hover:bg-green-900/50 transition-colors"
+                      >
+                        <div className="flex items-center gap-2">
+                          <HelpCircle className="h-4 w-4 text-green-500" />
+                          <span className="font-medium text-sm">Question Bank</span>
+                        </div>
+                        {expandedSections.questionBank ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                      </button>
+                      <AnimatePresence>
+                        {expandedSections.questionBank && (
+                          <motion.div 
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: 'auto', opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            transition={{ duration: 0.2 }}
+                          >
+                            <CardContent className="pt-3">
+                              <QuestionBankManager />
+                            </CardContent>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </Card>
+                  </div>
                 )}
               </TabsContent>
             </Tabs>
@@ -546,8 +649,27 @@ export function CoachingDashboard({ activeSubTab, setActiveSubTab }: CoachingDas
         {activeSubTab === 'browse' && (
           <motion.div variants={staggerContainer} initial="hidden" animate="visible" className="space-y-6">
             {/* Search and Category Bar */}
-            <motion.div variants={fadeIn} className="bg-white dark:bg-gray-900 rounded-2xl p-4 border border-gray-200 dark:border-gray-800">
-              <div className="flex flex-col sm:flex-row gap-4">
+            <motion.div variants={fadeIn} className="bg-white dark:bg-gray-900 rounded-xl sm:rounded-2xl p-3 sm:p-4 border border-gray-200 dark:border-gray-800">
+              {/* Mobile: Compact search bar with filter toggle */}
+              <div className="flex gap-2 sm:hidden">
+                <div className="flex-1 relative">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <Input placeholder="Search courses..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-8 h-9 text-sm" />
+                </div>
+                <button 
+                  onClick={() => setShowFilters(!showFilters)} 
+                  className={`p-2 rounded-lg transition-all ${showFilters ? 'bg-indigo-600 text-white' : 'bg-gray-100 dark:bg-gray-800'}`}
+                >
+                  <SlidersHorizontal className="w-4 h-4" />
+                </button>
+                <div className="flex items-center gap-0.5 bg-gray-100 dark:bg-gray-800 rounded-lg p-0.5">
+                  <button onClick={() => setViewMode('grid')} className={`p-1.5 rounded ${viewMode === 'grid' ? 'bg-white dark:bg-gray-700 shadow-sm' : ''}`}><Grid3X3 className="w-4 h-4" /></button>
+                  <button onClick={() => setViewMode('list')} className={`p-1.5 rounded ${viewMode === 'list' ? 'bg-white dark:bg-gray-700 shadow-sm' : ''}`}><List className="w-4 h-4" /></button>
+                </div>
+              </div>
+              
+              {/* Desktop: Full search bar */}
+              <div className="hidden sm:flex flex-row gap-4">
                 <div className="flex-1 relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
                   <Input placeholder="Search courses, teachers, subjects..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-10" />
@@ -570,10 +692,10 @@ export function CoachingDashboard({ activeSubTab, setActiveSubTab }: CoachingDas
                 </div>
               </div>
               
-              {/* Category Pills */}
-              <div className="flex items-center gap-2 overflow-x-auto pb-2 mt-4 scrollbar-thin">
+              {/* Category Pills - More compact on mobile */}
+              <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto pb-1 mt-3 sm:mt-4 scrollbar-thin -mx-1 px-1">
                 {categories.map((cat) => (
-                  <button key={cat} onClick={() => setSelectedCategory(cat)} className={`px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-all ${selectedCategory === cat ? 'bg-indigo-600 text-white' : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'}`}>{cat === 'all' ? 'All' : cat}</button>
+                  <button key={cat} onClick={() => setSelectedCategory(cat)} className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-full sm:rounded-lg text-xs sm:text-sm font-medium whitespace-nowrap transition-all ${selectedCategory === cat ? 'bg-indigo-600 text-white' : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'}`}>{cat === 'all' ? 'All' : cat}</button>
                 ))}
               </div>
             </motion.div>

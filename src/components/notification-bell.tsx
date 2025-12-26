@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Bell, Check, CheckCheck, Flag, AlertCircle, Info, MessageSquare } from 'lucide-react'
+import { Bell, Check, CheckCheck, Flag, AlertCircle, Info, MessageSquare, Radio } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -11,9 +11,14 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { useNotificationStore } from '@/stores/notification-store'
 import { useAuthStore } from '@/stores/auth-store'
+import { useLiveTestStore } from '@/stores/live-test-store'
 import { cn } from '@/lib/utils'
 
-export function NotificationBell() {
+interface NotificationBellProps {
+  onLiveTestClick?: () => void
+}
+
+export function NotificationBell({ onLiveTestClick }: NotificationBellProps) {
   const { user } = useAuthStore()
   const { 
     notifications, 
@@ -22,6 +27,7 @@ export function NotificationBell() {
     markAsRead, 
     markAllAsRead 
   } = useNotificationStore()
+  const { isLiveTestActive, activeTestTitle } = useLiveTestStore()
   
   useEffect(() => {
     if (!user?.id) return
@@ -60,6 +66,10 @@ export function NotificationBell() {
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" size="icon" className="relative">
           <Bell className="h-5 w-5" />
+          {/* Live Test Active Indicator - Red Blinking Dot */}
+          {isLiveTestActive && (
+            <span className="absolute top-0 left-0 h-2.5 w-2.5 rounded-full bg-red-500 animate-pulse" />
+          )}
           {unreadCount > 0 && (
             <span className="absolute -top-1 -right-1 h-5 w-5 rounded-full bg-red-500 text-[10px] font-bold text-white flex items-center justify-center">
               {unreadCount > 9 ? '9+' : unreadCount}
@@ -68,6 +78,36 @@ export function NotificationBell() {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-80">
+        {/* Live Test Banner - Show when active */}
+        {isLiveTestActive && (
+          <>
+            <DropdownMenuItem
+              className="flex items-center gap-3 p-3 cursor-pointer bg-red-50 dark:bg-red-900/20 border-b border-red-200 dark:border-red-800"
+              onClick={() => {
+                if (onLiveTestClick) onLiveTestClick()
+              }}
+            >
+              <div className="flex-shrink-0">
+                <div className="relative">
+                  <Radio className="h-5 w-5 text-red-500" />
+                  <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-red-500 animate-pulse" />
+                </div>
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-red-600 dark:text-red-400 flex items-center gap-2">
+                  <span className="animate-pulse">LIVE</span> Test Available!
+                </p>
+                <p className="text-xs text-red-500/80">
+                  {activeTestTitle || 'Tap to start'}
+                </p>
+              </div>
+              <span className="text-xs px-2 py-1 rounded bg-red-500 text-white font-medium">
+                Go →
+              </span>
+            </DropdownMenuItem>
+          </>
+        )}
+        
         <DropdownMenuLabel className="flex items-center justify-between">
           <span>Notifications</span>
           {unreadCount > 0 && (

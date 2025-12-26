@@ -285,134 +285,137 @@ export function StudentManagement({ courseId }: StudentManagementProps) {
   };
 
   return (
-    <div className="space-y-4">
-      {/* Tab Buttons */}
-      <div className="flex gap-1 p-1 bg-muted rounded-lg">
+    <div className="space-y-3">
+      {/* Tab Buttons - More compact */}
+      <div className="flex gap-1 p-1 bg-muted/50 rounded-lg overflow-x-auto">
         <button
           onClick={() => setActiveTab('overview')}
-          className={`flex-1 px-3 py-2 rounded text-sm font-medium transition-colors ${
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors whitespace-nowrap ${
             activeTab === 'overview'
               ? 'bg-background shadow text-foreground'
               : 'text-muted-foreground hover:text-foreground'
           }`}
         >
-          📊 Overview
+          <BarChart3 className="h-3.5 w-3.5" />
+          <span className="hidden sm:inline">Overview</span>
         </button>
         <button
           onClick={() => setActiveTab('students')}
-          className={`flex-1 px-3 py-2 rounded text-sm font-medium transition-colors ${
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors whitespace-nowrap ${
             activeTab === 'students'
               ? 'bg-background shadow text-foreground'
               : 'text-muted-foreground hover:text-foreground'
           }`}
         >
-          👥 Students
+          <Users className="h-3.5 w-3.5" />
+          <span className="hidden sm:inline">Students</span>
         </button>
         <button
           onClick={() => setActiveTab('add')}
-          className={`flex-1 px-3 py-2 rounded text-sm font-medium transition-colors ${
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors whitespace-nowrap ${
             activeTab === 'add'
               ? 'bg-background shadow text-foreground'
               : 'text-muted-foreground hover:text-foreground'
           }`}
         >
-          ➕ Add New
+          <Plus className="h-3.5 w-3.5" />
+          <span className="hidden sm:inline">Add</span>
         </button>
         <button
           onClick={() => setActiveTab('analytics')}
-          className={`flex-1 px-3 py-2 rounded text-sm font-medium transition-colors ${
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors whitespace-nowrap ${
             activeTab === 'analytics'
               ? 'bg-background shadow text-foreground'
               : 'text-muted-foreground hover:text-foreground'
           }`}
         >
-          📈 Analytics
+          <TrendingUp className="h-3.5 w-3.5" />
+          <span className="hidden sm:inline">Analytics</span>
         </button>
       </div>
       
       {/* Overview Tab */}
       {activeTab === 'overview' && (
-        <div className="space-y-4">
-          {/* Stats Cards */}
-          <div className="grid grid-cols-2 gap-3">
-            <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
-              <div className="flex items-center gap-2 mb-2">
-                <Users className="h-5 w-5 text-blue-500" />
-                <span className="text-xs text-muted-foreground">Total Students</span>
+        <div className="space-y-3">
+          {/* Stats Cards - More compact */}
+          <div className="grid grid-cols-2 gap-2">
+            <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+              <div className="flex items-center gap-2 mb-1">
+                <Users className="h-4 w-4 text-blue-500" />
+                <span className="text-[10px] text-muted-foreground">Total Students</span>
               </div>
-              <p className="text-2xl font-bold">{stats.totalStudents}</p>
-              <p className="text-xs text-green-600">{stats.activeStudents} active</p>
+              <p className="text-xl font-bold">{stats.totalStudents}</p>
+              <p className="text-[10px] text-green-600">{stats.activeStudents} active</p>
             </div>
-            <div className="p-4 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
-              <div className="flex items-center gap-2 mb-2">
-                <TrendingUp className="h-5 w-5 text-green-500" />
-                <span className="text-xs text-muted-foreground">Avg Progress</span>
+            <div className="p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
+              <div className="flex items-center gap-2 mb-1">
+                <TrendingUp className="h-4 w-4 text-green-500" />
+                <span className="text-[10px] text-muted-foreground">Avg Progress</span>
               </div>
-              <p className="text-2xl font-bold">{stats.avgProgress}%</p>
-              <Progress value={stats.avgProgress} className="h-1.5 mt-2" />
+              <p className="text-xl font-bold">{stats.avgProgress}%</p>
+              <Progress value={stats.avgProgress} className="h-1 mt-1.5" />
             </div>
-            <div className="p-4 bg-purple-50 dark:bg-purple-900/20 rounded-lg border border-purple-200 dark:border-purple-800">
-              <div className="flex items-center gap-2 mb-2">
-                <Trophy className="h-5 w-5 text-purple-500" />
-                <span className="text-xs text-muted-foreground">Avg Score</span>
+            <div className="p-3 bg-purple-50 dark:bg-purple-900/20 rounded-lg border border-purple-200 dark:border-purple-800">
+              <div className="flex items-center gap-2 mb-1">
+                <Trophy className="h-4 w-4 text-purple-500" />
+                <span className="text-[10px] text-muted-foreground">Avg Score</span>
               </div>
-              <p className="text-2xl font-bold">{stats.avgScore}%</p>
+              <p className="text-xl font-bold">{stats.avgScore}%</p>
             </div>
-            <div className="p-4 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-800">
-              <div className="flex items-center gap-2 mb-2">
-                <Crown className="h-5 w-5 text-amber-500" />
-                <span className="text-xs text-muted-foreground">Top Performer</span>
+            <div className="p-3 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-800">
+              <div className="flex items-center gap-2 mb-1">
+                <Crown className="h-4 w-4 text-amber-500" />
+                <span className="text-[10px] text-muted-foreground">Top Performer</span>
               </div>
               <p className="text-sm font-bold truncate">{stats.topPerformer.name}</p>
-              <p className="text-xs text-muted-foreground">{stats.topPerformer.avgScore}% avg</p>
+              <p className="text-[10px] text-muted-foreground">{stats.topPerformer.avgScore}% avg</p>
             </div>
           </div>
           
-          {/* Top Performers */}
-          <div className="p-4 border rounded-lg">
-            <h4 className="font-medium mb-3 flex items-center gap-2">
+          {/* Top Performers - More compact */}
+          <div className="p-3 border rounded-lg">
+            <h4 className="font-medium text-sm mb-2 flex items-center gap-2">
               <Award className="h-4 w-4 text-amber-500" />
               Top Performers
             </h4>
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               {students.sort((a, b) => b.avgScore - a.avgScore).slice(0, 3).map((s, idx) => (
-                <div key={s.id} className="flex items-center gap-3 p-2 bg-muted/50 rounded">
-                  <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
+                <div key={s.id} className="flex items-center gap-2 p-1.5 bg-muted/50 rounded">
+                  <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
                     idx === 0 ? 'bg-amber-500 text-white' :
                     idx === 1 ? 'bg-gray-400 text-white' :
                     'bg-amber-700 text-white'
                   }`}>
                     {idx + 1}
                   </span>
-                  <Avatar className="h-8 w-8">
-                    <AvatarFallback>{s.name.charAt(0)}</AvatarFallback>
+                  <Avatar className="h-6 w-6">
+                    <AvatarFallback className="text-xs">{s.name.charAt(0)}</AvatarFallback>
                   </Avatar>
-                  <div className="flex-1">
-                    <p className="text-sm font-medium">{s.name}</p>
-                    <p className="text-xs text-muted-foreground">{s.avgScore}% avg score</p>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium truncate">{s.name}</p>
+                    <p className="text-[10px] text-muted-foreground">{s.avgScore}%</p>
                   </div>
-                  <Star className={`h-4 w-4 ${idx === 0 ? 'text-amber-500 fill-amber-500' : 'text-muted-foreground'}`} />
                 </div>
               ))}
             </div>
           </div>
           
-          {/* Recent Activity */}
-          <div className="p-4 border rounded-lg">
-            <h4 className="font-medium mb-3 flex items-center gap-2">
+          {/* Recent Activity - More compact */}
+          <div className="p-3 border rounded-lg">
+            <h4 className="font-medium text-sm mb-2 flex items-center gap-2">
               <Clock className="h-4 w-4 text-blue-500" />
               Recent Activity
             </h4>
-            <div className="space-y-2">
+            <div className="space-y-1">
               {students.sort((a, b) => (b.lastActiveAt || 0) - (a.lastActiveAt || 0)).slice(0, 5).map(s => (
-                <div key={s.id} className="flex items-center justify-between p-2 bg-muted/50 rounded text-sm">
+                <div key={s.id} className="flex items-center justify-between p-1.5 bg-muted/50 rounded text-xs">
                   <div className="flex items-center gap-2">
-                    <Avatar className="h-6 w-6">
-                      <AvatarFallback className="text-xs">{s.name.charAt(0)}</AvatarFallback>
+                    <Avatar className="h-5 w-5">
+                      <AvatarFallback className="text-[10px]">{s.name.charAt(0)}</AvatarFallback>
                     </Avatar>
-                    <span>{s.name}</span>
+                    <span className="truncate">{s.name}</span>
                   </div>
-                  <span className="text-xs text-muted-foreground">
+                  <span className="text-[10px] text-muted-foreground whitespace-nowrap ml-2">
                     {s.lastActiveAt ? formatTimeAgo(s.lastActiveAt) : 'Never'}
                   </span>
                 </div>
@@ -424,21 +427,21 @@ export function StudentManagement({ courseId }: StudentManagementProps) {
       
       {/* Students List Tab */}
       {activeTab === 'students' && (
-        <div className="space-y-4">
-          {/* Search and Filter */}
-          <div className="flex flex-col sm:flex-row gap-2">
+        <div className="space-y-3">
+          {/* Search and Filter - All in one row */}
+          <div className="flex gap-2">
             <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <Input 
-                placeholder="Search students..."
+                placeholder="Search..."
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
-                className="pl-9"
+                className="pl-8 h-9 text-sm"
               />
             </div>
             <Select value={filterStatus} onValueChange={(v) => setFilterStatus(v as any)}>
-              <SelectTrigger className="w-32">
-                <SelectValue placeholder="Status" />
+              <SelectTrigger className="w-20 h-9 text-xs">
+                <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All</SelectItem>
@@ -447,8 +450,8 @@ export function StudentManagement({ courseId }: StudentManagementProps) {
               </SelectContent>
             </Select>
             <Select value={sortBy} onValueChange={(v) => setSortBy(v as any)}>
-              <SelectTrigger className="w-32">
-                <SelectValue placeholder="Sort" />
+              <SelectTrigger className="w-24 h-9 text-xs">
+                <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="recent">Recent</SelectItem>
@@ -459,44 +462,44 @@ export function StudentManagement({ courseId }: StudentManagementProps) {
             </Select>
           </div>
           
-          {/* Students List */}
-          <div className="space-y-2 max-h-[450px] overflow-y-auto">
+          {/* Students List - More compact */}
+          <div className="space-y-2 max-h-[400px] overflow-y-auto">
             {filteredStudents.length === 0 ? (
-              <div className="text-center py-8 text-muted-foreground">
-                <Users className="h-12 w-12 mx-auto mb-3 opacity-30" />
-                <p className="text-sm">No students found</p>
+              <div className="text-center py-6 text-muted-foreground">
+                <Users className="h-10 w-10 mx-auto mb-2 opacity-30" />
+                <p className="text-xs">No students found</p>
               </div>
             ) : (
               filteredStudents.map(student => (
                 <div 
                   key={student.id} 
-                  className="p-4 border rounded-lg bg-background hover:bg-muted/50 transition-colors"
+                  className="p-3 border rounded-lg bg-background hover:bg-muted/30 transition-colors"
                 >
-                  <div className="flex items-start gap-3">
-                    <Avatar className="h-10 w-10">
-                      <AvatarFallback>{student.name.charAt(0)}</AvatarFallback>
+                  <div className="flex items-start gap-2.5">
+                    <Avatar className="h-9 w-9">
+                      <AvatarFallback className="text-sm">{student.name.charAt(0)}</AvatarFallback>
                     </Avatar>
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        <h4 className="font-medium truncate">{student.name}</h4>
-                        <span className={`px-2 py-0.5 rounded-full text-xs ${getStatusColor(student.status)}`}>
+                      <div className="flex items-center gap-2 mb-0.5">
+                        <h4 className="font-medium text-sm truncate">{student.name}</h4>
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] ${getStatusColor(student.status)}`}>
                           {student.status}
                         </span>
                       </div>
-                      <p className="text-xs text-muted-foreground truncate">{student.email}</p>
-                      <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
+                      <p className="text-[11px] text-muted-foreground truncate">{student.email}</p>
+                      <div className="flex items-center gap-3 mt-1.5 text-[10px] text-muted-foreground">
                         <span className="flex items-center gap-1">
-                          <BookOpen className="h-3 w-3" /> {student.coursesEnrolled} courses
+                          <BookOpen className="h-3 w-3" /> {student.coursesEnrolled}
                         </span>
                         <span className="flex items-center gap-1">
                           <Trophy className="h-3 w-3" /> {student.avgScore}%
                         </span>
                         <span className="flex items-center gap-1">
-                          <Clock className="h-3 w-3" /> {student.lastActiveAt ? formatTimeAgo(student.lastActiveAt) : 'Never'}
+                          <Clock className="h-3 w-3" /> {student.lastActiveAt ? formatTimeAgo(student.lastActiveAt) : 'N/A'}
                         </span>
                       </div>
-                      <div className="mt-2">
-                        <div className="flex items-center justify-between text-xs mb-1">
+                      <div className="mt-1.5">
+                        <div className="flex items-center justify-between text-[10px] mb-0.5">
                           <span>Progress</span>
                           <span>{student.totalProgress}%</span>
                         </div>

@@ -8,6 +8,8 @@ import { LoginForm } from './features/auth/login-form'
 import { MainLayout } from './components/layout/main-layout'
 import { Loading } from './components/loading'
 import { ToastProvider } from './components/ui/toast'
+import { ErrorBoundary } from './components/error-boundary'
+import { OfflineIndicator } from './components/offline-indicator'
 import type { User } from './types'
 
 function App() {
@@ -75,16 +77,22 @@ function App() {
 
   if (!user) {
     return (
-      <ToastProvider>
-        <LoginForm />
-      </ToastProvider>
+      <ErrorBoundary>
+        <ToastProvider>
+          <OfflineIndicator />
+          <LoginForm />
+        </ToastProvider>
+      </ErrorBoundary>
     )
   }
 
   return (
-    <ToastProvider>
-      <MainLayout />
-    </ToastProvider>
+    <ErrorBoundary>
+      <ToastProvider>
+        <OfflineIndicator />
+        <MainLayout />
+      </ToastProvider>
+    </ErrorBoundary>
   )
 }
 
